@@ -317,6 +317,7 @@
     <div class="upload-row">
       <span class="upload-actions">
         <button type="button" class="btn" id="upload-btn">Click to select CSV or ODS files</button>
+        <button type="button" class="btn" id="default-data-btn">Use default data</button>
         <button type="button" class="btn" id="export-btn" disabled>Export</button>
         <button type="button" class="btn" id="reset-btn">Clear</button>
       </span>
@@ -2463,6 +2464,29 @@ uploadBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
   if (fileInput.files.length) handleFiles(fileInput.files);
   fileInput.value = '';
+});
+// "Use default data": fetches the two sample .ods files that sit next to
+// this page and feeds them through the normal upload path. Needs the page
+// served over http(s) (e.g. GitHub Pages); browsers usually block fetch()
+// on file:// pages, in which case the log says so.
+const DEFAULT_DATA_FILES = ['Load vs. PV Sample.ods', 'Gas Sample.ods'];
+document.getElementById('default-data-btn').addEventListener('click', async () => {
+  clearLog();
+  showSpinner();
+  setStatus('Loading default data...');
+  try {
+    const files = [];
+    for (const name of DEFAULT_DATA_FILES) {
+      const res = await fetch(encodeURIComponent(name));
+      if (!res.ok) throw new Error(res.status);
+      files.push(new File([await res.blob()], name));
+    }
+    await handleFiles(files);
+  } catch (err) {
+    hideSpinner();
+    setStatus('');
+    logMsg("Couldn't load the default data. It only works when this page is opened from a web server, not straight from a file.");
+  }
 });
 document.getElementById('reset-btn').addEventListener('click', () => {
   DATA.heatmaps = JSON.parse(JSON.stringify(EMPTY_DATA.heatmaps));
