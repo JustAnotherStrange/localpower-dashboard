@@ -1,0 +1,2557 @@
+<title>Own Your Power: Household Energy Profile Template</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --surface-2:      #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-load:    #2a78d6; /* blue  - slot 1 */
+    --series-pv:      #008300; /* green - slot 2 */
+    --series-gas:     #eb6834; /* orange - slot 6 */
+    --series-ev:      #4a3aa7; /* violet - slot 7, EV-charging overlay */
+    --good:           #006300;
+    --offset-fill:    #93cf8c; /* solid pastel green - potential-offset area */
+    --surplus-fill:   #f2c94c; /* solid pastel gold (not amber) - surplus-generation area */
+    --ev-supply-fill: #9085e9; /* lighter step of the violet ramp - EV battery powering the home */
+  --critical:       #d03b3b; /* dataviz status 'critical' - invalid field */
+  --ev-problem-bg:  #fbecec; /* faint red tint behind a settings problem */
+  --ev-verdict-bg:  #efedfb; /* faint violet tint behind the bidirectional verdict */
+    /* Corner rounding -- hard-cornered look is being tried out for now.
+       To restore the previous rounded-corner look, set these back to the
+       value noted in each comment (nothing else needs to change). */
+    --radius-card:    0px; /* was 10px */
+    --radius-chip:    0px; /* was 999px */
+    --radius-tooltip: 0px; /* was 6px */
+    --radius-swatch:  0px; /* was 2px */
+    --radius-btn:     0px; /* was 6px */
+  }
+  /* Whole-page background, shifted to a faint violet on the Electric
+     vehicle tab (showTab() sets html[data-tab]) so switching tabs feels
+     like going somewhere. Kept close to --surface-2 so cards read the same. */
+  html { background: #f9f9f7; transition: background-color 0.45s ease; }
+  html[data-tab="tab-ev"] { background: #e9e5f7; }
+  .viz-root {
+    font-family: Helvetica, Arial, sans-serif;
+    background: transparent;
+    color: var(--text-primary);
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+  }
+  .viz-root h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .viz-root .lede { color: var(--text-secondary); font-size: 0.92rem; max-width: 62ch; margin: 0 0 4px; }
+  .viz-root .provenance { color: var(--text-muted); font-size: 0.78rem; margin: 0 0 28px; }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    padding: 20px 22px 22px;
+    margin-bottom: 20px;
+    overflow-x: auto;
+  }
+  .card h2 { font-size: 1.02rem; margin: 0 0 2px; }
+  .card .sub { color: var(--text-secondary); font-size: 0.84rem; margin: 0 0 16px; }
+  .legend { display: flex; gap: 18px; margin-bottom: 10px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.82rem; color: var(--text-secondary); }
+  .legend-key { width: 14px; height: 3px; border-radius: var(--radius-swatch); display: inline-block; }
+  .legend-key.rect { height: 10px; border-radius: var(--radius-swatch); }
+  /* Mirrors the SVG hatch pattern drawn for the gas-compound band in
+     drawLoadVsPv, so the legend swatch reads as the same texture rather
+     than a plain solid color -- see CLAUDE.md gas-compound-toggle note. */
+  .legend-key.hatch {
+    background-color: transparent;
+    background-image: repeating-linear-gradient(45deg, var(--series-gas) 0 3px, transparent 3px 6px);
+  }
+  .legend-key.dashed { height: 0; border-top: 3px dashed var(--series-gas); background: none; }
+  /* Same pattern as the gas hatch/dashed swatches above, in the EV series
+     color -- see the EV-charging overlay note in CLAUDE.md. */
+  .legend-key.hatch-ev {
+    background-color: transparent;
+    background-image: repeating-linear-gradient(45deg, var(--series-ev) 0 3px, transparent 3px 6px);
+  }
+  .legend-key.dashed-ev { height: 0; border-top: 3px dashed var(--series-ev); background: none; }
+  .axis-label { fill: var(--text-muted); font-size: 13px; }
+  /* EV schedule-marker labels (leaves/home/charging lines) -- smaller and
+     lighter than .axis-label since they're supplementary annotation, not a
+     primary axis reading. */
+  .ev-marker-label { fill: var(--text-muted); font-size: 10px; }
+  /* Tinted EV-violet rather than the plain --grid gray the hour-of-day
+     reference lines use -- at full opacity that gray was too close to
+     --grid to read against the plot background, and identical to it (so
+     invisible) on the hours where a marker happens to land on 6/12/18's
+     existing gridline. Bolder than --grid but still lighter/thinner than
+     the actual EV band/line (stroke-width 3, full opacity) so it stays
+     visually secondary to it. */
+  .ev-marker-line { stroke: var(--series-ev); stroke-width: 1.5; opacity: 0.55; }
+  .grid-line { stroke: var(--grid); stroke-width: 1; }
+  .baseline { stroke: var(--baseline); stroke-width: 1; }
+  .chart-controls { display: flex; justify-content: flex-end; align-items: center; gap: 18px; flex-wrap: wrap; margin-bottom: 4px; }
+  .weekday-toggle {
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    font-size: 0.82rem; color: var(--text-secondary);
+  }
+  .weekday-toggle input { cursor: pointer; }
+  /* Applies to the gas/EV-charging overlay checkboxes, disabled (and
+     reading as such) until their data prerequisite is met. See CLAUDE.md
+     EV-charging-overlay note. */
+  .weekday-toggle:has(input:disabled) { opacity: 0.5; cursor: default; }
+  /* EV settings: two labeled groups (Commute, Charging) side by side on a
+     wide screen, each a grid of roomy fields, so the controls don't read as
+     one crowded row of tiny boxes. */
+  .ev-charge-fields { margin: 18px 0 0; }
+  .ev-field-groups {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px;
+  }
+  .ev-field-group {
+    border: 1px solid var(--border); border-radius: var(--radius-card);
+    background: var(--surface-2); padding: 14px 16px 16px;
+  }
+  .ev-field-group-label {
+    display: block; font-size: 0.95rem; font-weight: 700; color: var(--text-primary); margin: 0 0 12px;
+  }
+  .ev-field-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px 16px;
+  }
+  .ev-field-grid label {
+    display: flex; flex-direction: column; gap: 5px;
+    font-size: 0.84rem; color: var(--text-secondary);
+  }
+  /* Input + its up/down stepper buttons (added by initEvSteppers()), styled
+     as one box. Native number spinners are hidden so every field gets the
+     same, bigger arrows; type="time" has none of its own in most browsers. */
+  .stepper {
+    display: flex; align-items: stretch; max-width: 170px;
+    background: var(--surface-1); border: 1px solid var(--baseline); border-radius: var(--radius-btn);
+  }
+  .stepper:focus-within { border-color: var(--series-ev); box-shadow: 0 0 0 2px rgba(74,58,167,0.18); }
+  .stepper input {
+    flex: 1; min-width: 0; font: inherit; font-size: 1rem; color: var(--text-primary);
+    background: transparent; border: none; padding: 7px 10px; outline: none;
+  }
+  .stepper input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+  .stepper input::-webkit-inner-spin-button,
+  .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  .stepper input::-webkit-calendar-picker-indicator { display: none; }
+  .stepper-btns { display: flex; flex-direction: column; border-left: 1px solid var(--grid); }
+  .stepper-btn {
+    flex: 1; width: 28px; padding: 0; border: none; background: none; cursor: pointer;
+    color: var(--text-secondary); font-size: 0.62rem; line-height: 1;
+  }
+  .stepper-btn + .stepper-btn { border-top: 1px solid var(--grid); }
+  .stepper-btn:hover { background: var(--grid); color: var(--text-primary); }
+  .stepper-btn:focus-visible { outline: 2px solid var(--text-primary); outline-offset: -2px; }
+  /* A field whose value can't work (e.g. "Start charging at" while the car
+     is still away): red box plus a message right under it. */
+  .ev-field-invalid .stepper { border-color: var(--critical); box-shadow: 0 0 0 1px var(--critical); }
+  .ev-field-invalid input { color: var(--critical); }
+  .ev-field-error { color: var(--critical); font-weight: 700; font-size: 0.8rem; }
+  /* The bidirectional verdict: the one plain-language takeaway on the EV
+     tab, so it's styled as a headline callout rather than a note. */
+  .ev-verdict {
+    margin: 4px 0 18px; padding: 16px 20px;
+    font-size: 0.95rem; line-height: 1.5; color: var(--text-secondary);
+    background: var(--ev-verdict-bg);
+  }
+  .ev-verdict-headline {
+    display: block; font-size: 1.35rem; line-height: 1.3; font-weight: 700;
+    color: var(--series-ev); margin: 0 0 6px;
+  }
+  .ev-verdict strong { color: var(--text-primary); }
+  /* Same box, in red, when the settings can't work: the problem takes the
+     callout's place so it can't go unnoticed. */
+  .ev-verdict.is-problem { background: var(--ev-problem-bg); border-left: 6px solid var(--critical); color: var(--text-primary); }
+  .ev-verdict.is-problem .ev-verdict-headline { color: var(--critical); }
+  .ev-problem-detail { font-size: 1.08rem; font-weight: 700; }
+  /* Household profile / Electric vehicle tabs. Underlined-text tabs rather
+     than boxed ones, so they don't need a --radius-* variable at all. */
+  .tab-bar { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 0 0 20px; }
+  .tab {
+    font: inherit; font-size: 0.95rem; font-weight: 700; color: var(--text-muted);
+    background: none; border: none; border-bottom: 3px solid transparent;
+    padding: 8px 14px; margin-bottom: -1px; cursor: pointer;
+  }
+  .tab:hover { color: var(--text-secondary); }
+  .tab[aria-selected="true"] { color: var(--text-primary); border-bottom-color: var(--text-primary); }
+  .tab:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+  /* Per-tab authoring options, directly under the tab bar */
+  .tab-options { display: flex; margin: -8px 0 14px; }
+  /* Charge only / Bidirectional switch: same visually-hidden-checkbox +
+     sibling-styled switch as the monthly-view toggle below, but its own
+     classes so the monthly-view sync code (which selects every
+     .monthly-view-toggle-input) doesn't pick it up. */
+  .ev-mode-input {
+    position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden;
+    clip: rect(0,0,0,0); white-space: nowrap;
+  }
+  .ev-mode-input:not(:checked) ~ .ev-mode-option-charge,
+  .ev-mode-input:checked ~ .ev-mode-option-bidir { color: var(--text-primary); font-weight: 700; }
+  .ev-mode-input:checked ~ .switch .switch-track { background: var(--series-ev); }
+  .ev-mode-input:checked ~ .switch .switch-thumb { transform: translateX(16px); }
+  .ev-mode-input:focus-visible ~ .switch .switch-track { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+  .monthly-view-toggle {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+    font-size: 0.82rem; color: var(--text-secondary);
+  }
+  /* The checkbox itself is visually hidden -- the label wrapping everything
+     forwards clicks to it natively, so the two text options and the switch
+     graphic are just plain (non-form) siblings styled off its :checked
+     state via the ~ combinator. */
+  .monthly-view-toggle-input {
+    position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden;
+    clip: rect(0,0,0,0); white-space: nowrap;
+  }
+  .monthly-view-option { transition: color 0.15s, font-weight 0.15s; }
+  .monthly-view-toggle-input:not(:checked) ~ .monthly-view-option-totals { color: var(--text-primary); font-weight: 700; }
+  .monthly-view-toggle-input:checked ~ .monthly-view-option-daily { color: var(--text-primary); font-weight: 700; }
+  /* A phone-settings-style switch. Like the month-slider's circular thumb,
+     the track/thumb shapes here are a functional round control, not a
+     decorative rounded box -- so (per the hard-corners experiment noted in
+     CLAUDE.md) they're hardcoded here rather than driven by the
+     --radius-* variables that flatten cards/chips/buttons/etc. */
+  .switch { position: relative; display: inline-flex; width: 36px; height: 20px; flex: none; }
+  .switch-track {
+    position: absolute; inset: 0; background: var(--border); border-radius: 999px;
+    transition: background 0.15s;
+  }
+  .switch-thumb {
+    position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--surface-1); box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    transition: transform 0.15s;
+  }
+  .monthly-view-toggle-input:checked ~ .switch .switch-track { background: var(--series-load); }
+  .monthly-view-toggle-input:checked ~ .switch .switch-thumb { transform: translateX(16px); }
+  #monthly-view-toggle-gas:checked ~ .switch .switch-track { background: var(--series-gas); }
+  .monthly-view-toggle-input:focus-visible ~ .switch .switch-track { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+  .month-tabs { margin: 0 auto 16px; max-width: 480px; }
+  .month-slider-label { font-weight: 700; font-size: 1rem; color: var(--text-primary); margin-bottom: 8px; text-align: center; }
+  .month-slider {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 6px;
+    border-radius: 3px; background: var(--grid); outline: none; cursor: pointer; margin: 0;
+  }
+  .month-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 18px; height: 18px;
+    border-radius: 50%; background: var(--series-load); border: 2px solid var(--surface-1);
+    box-shadow: 0 0 0 1px var(--border); cursor: pointer;
+  }
+  .month-slider::-moz-range-track { height: 6px; border-radius: 3px; background: var(--grid); }
+  .month-slider::-moz-range-thumb {
+    width: 18px; height: 18px; border-radius: 50%; background: var(--series-load);
+    border: 2px solid var(--surface-1); box-shadow: 0 0 0 1px var(--border); cursor: pointer;
+  }
+  .month-slider:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--series-load); outline-offset: 2px; }
+  .month-slider-ticks { display: flex; justify-content: space-between; font-size: 0.76rem; color: var(--text-muted); margin-top: 5px; padding: 0 1px; }
+  .month-slider-ticks span { cursor: pointer; user-select: none; }
+  .month-slider-ticks span.active { color: var(--text-primary); font-weight: 700; }
+  .tooltip {
+    position: fixed; pointer-events: none; z-index: 5;
+    background: var(--text-primary); color: var(--surface-1);
+    font-size: 0.76rem; padding: 6px 9px; border-radius: var(--radius-tooltip);
+    line-height: 1.45; white-space: nowrap; opacity: 0; transition: opacity 0.08s;
+    transform: translate(-50%, -100%);
+  }
+  .tooltip strong { font-weight: 700; }
+  .chart-wrap { position: relative; flex: 1 1 auto; min-width: 0; }
+  .temp-trend-row { display: flex; align-items: center; gap: 14px; }
+  .temp-trend-label {
+    flex: none; width: 72px; text-align: right;
+    font-weight: 700; font-size: 0.86rem; color: var(--text-secondary);
+  }
+  footer.notes { color: var(--text-muted); font-size: 0.78rem; margin-top: 8px; }
+  footer.notes ul { margin: 6px 0 0; padding-left: 18px; }
+  @media (max-width: 720px) {
+    .side-by-side { grid-template-columns: 1fr !important; }
+  }
+  .btn {
+    font: inherit; font-size: 0.98rem; font-weight: 700; color: var(--text-primary);
+    background: var(--surface-1); border: 1.5px solid var(--text-primary);
+    border-radius: var(--radius-btn); padding: 10px 18px; cursor: pointer;
+    text-align: center;
+  }
+  .btn:hover:not(:disabled) { background: var(--grid); }
+  .btn:disabled { color: var(--text-muted); border-color: var(--border); cursor: not-allowed; background: var(--surface-1); }
+  .upload-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-top: 14px; }
+  .upload-actions { display: flex; flex-direction: column; gap: 10px; width: fit-content; }
+  .upload-status-wrap { display: flex; align-items: center; padding-top: 3px; }
+  .upload-status { font-size: 0.82rem; color: var(--text-secondary); }
+  .spinner {
+    display: inline-block; width: 13px; height: 13px; margin-right: 7px;
+    border: 2px solid var(--grid); border-top-color: var(--series-load);
+    border-radius: 50%; animation: spin 0.7s linear infinite; flex: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .upload-checks { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  .check-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 0.82rem; padding: 5px 12px; border-radius: var(--radius-chip);
+    border: 1px solid var(--border); color: var(--text-muted); background: var(--surface-2);
+  }
+  .check-chip .chip-icon { font-size: 0.85rem; line-height: 1; }
+  .check-chip.loaded { color: var(--good); border-color: var(--good); background: rgba(0,99,0,0.07); }
+  .upload-log { margin-top: 10px; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.6; }
+  .upload-log div.ok { color: var(--good); }
+  .chart-placeholder {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 160px; padding: 20px; text-align: center;
+    color: var(--text-muted); font-size: 0.84rem;
+  }
+  .callout-row { display: flex; align-items: center; gap: 18px; padding: 14px 0; }
+  .callout-row:not(:first-child) { border-top: 1px solid var(--border); }
+  .callout-number { font-size: 2.1rem; font-weight: 700; line-height: 1; flex: none; min-width: 84px; text-align: right; }
+  .callout-text { color: var(--text-secondary); font-size: 0.9rem; line-height: 1.45; margin: 0; }
+  .callout-highlight { font-weight: 700; font-size: 1.3em; color: var(--text-primary); }
+  .callout-row .chart-placeholder { min-height: 0; padding: 6px 0; justify-content: flex-start; text-align: left; }
+</style>
+
+<div class="viz-root" id="app">
+  <h1>Own Your Power Household Energy Profile</h1>
+
+  <div class="card" id="upload-card">
+    <h2>Upload a household's dataset</h2>
+    <p class="sub">Add electric, solar, and/or gas data in CSV or ODS format, together or one at a time.</p>
+    <input type="file" id="file-input" accept=".csv,.ods" multiple style="display:none">
+    <div class="upload-row">
+      <span class="upload-actions">
+        <button type="button" class="btn" id="upload-btn">Click to select CSV or ODS files</button>
+        <button type="button" class="btn" id="export-btn" disabled>Export</button>
+        <button type="button" class="btn" id="reset-btn">Clear</button>
+      </span>
+      <span class="upload-status-wrap">
+        <span class="spinner" id="upload-spinner" style="display:none;"></span>
+        <span class="upload-status" id="upload-status">No data loaded yet. Upload a file above to get started.</span>
+      </span>
+    </div>
+    <div class="upload-checks" id="upload-checks">
+      <span class="check-chip" id="chip-electric"><span class="chip-icon">○</span> Electric usage</span>
+      <span class="check-chip" id="chip-gas"><span class="chip-icon">○</span> Gas usage</span>
+      <span class="check-chip" id="chip-pv"><span class="chip-icon">○</span> Solar (PV) potential</span>
+    </div>
+    <div class="upload-log" id="upload-log"></div>
+  </div>
+
+  <div class="tab-bar" id="tab-bar" role="tablist">
+    <button type="button" class="tab" role="tab" id="tab-btn-profile" aria-controls="tab-profile" aria-selected="true">Household profile</button>
+    <button type="button" class="tab" role="tab" id="tab-btn-ev" aria-controls="tab-ev" aria-selected="false">Electric vehicle</button>
+  </div>
+
+  <div class="tab-panel" id="tab-profile" role="tabpanel" aria-labelledby="tab-btn-profile">
+  <div class="card" id="card-load-pv">
+    <h2>Hourly Load vs. Hourly Onsite PV Potential by Month</h2>
+    <br>
+    <div class="chart-controls">
+      <label class="weekday-toggle"><input type="checkbox" id="weekday-toggle"> Weekdays only (Mon&ndash;Fri)</label>
+      <label class="weekday-toggle" id="gas-compound-control"><input type="checkbox" id="gas-compound-toggle" autocomplete="off" disabled> Add gas usage (as kWh)</label>
+    </div>
+    <div class="month-tabs" id="month-tabs"></div>
+    <div class="legend">
+      <span class="legend-item"><span class="legend-key" style="background:var(--series-load)"></span>Avg load (kWh)</span>
+      <span class="legend-item"><span class="legend-key" style="background:var(--series-pv)"></span>Avg PV production (kWh)</span>
+      <span class="legend-item"><span class="legend-key rect" style="background:var(--offset-fill)"></span>Potential offset (PV covers load)</span>
+      <span class="legend-item"><span class="legend-key rect" style="background:var(--surplus-fill)"></span>Surplus PV generation</span>
+      <span class="legend-item" id="legend-gas-compound-fill" style="display:none"><span class="legend-key rect hatch"></span>Added gas usage (kWh equiv.)</span>
+      <span class="legend-item" id="legend-gas-compound-line" style="display:none"><span class="legend-key dashed"></span>Load + gas (kWh equiv.)</span>
+    </div>
+    <div class="chart-wrap"><svg id="chart-load-pv" width="100%" height="300"></svg></div>
+  </div>
+
+  <div class="card" id="card-monthly-elec">
+    <h2>Monthly Electricity Usage vs Rooftop PV Potential</h2>
+    <p class="sub">The gap between the two bars is what the home would still draw from the grid even with rooftop solar installed.</p>
+    <div class="chart-controls">
+      <label class="monthly-view-toggle">
+        <input type="checkbox" class="monthly-view-toggle-input" id="monthly-view-toggle-elec" autocomplete="off" checked>
+        <span class="monthly-view-option monthly-view-option-totals">Monthly totals</span>
+        <span class="switch"><span class="switch-track"><span class="switch-thumb"></span></span></span>
+        <span class="monthly-view-option monthly-view-option-daily">Daily averages</span>
+      </label>
+    </div>
+    <div class="legend">
+      <span class="legend-item"><span class="legend-key rect" style="background:var(--series-load)"></span><span class="legend-text">Household load (<span id="legend-monthly-elec-unit">daily avg kWh/day</span>)</span></span>
+      <span class="legend-item"><span class="legend-key rect" style="background:var(--series-pv)"></span><span class="legend-text">Modeled PV potential (<span id="legend-monthly-pv-unit">daily avg kWh/day</span>)</span></span>
+    </div>
+    <div class="chart-wrap"><svg id="chart-monthly-elec" width="100%" height="300"></svg></div>
+  </div>
+
+  <div class="card" id="card-monthly-gas">
+    <h2>Monthly natural gas usage</h2>
+    <div class="chart-controls">
+      <label class="monthly-view-toggle">
+        <input type="checkbox" class="monthly-view-toggle-input" id="monthly-view-toggle-gas" autocomplete="off" checked>
+        <span class="monthly-view-option monthly-view-option-totals">Monthly totals</span>
+        <span class="switch"><span class="switch-track"><span class="switch-thumb"></span></span></span>
+        <span class="monthly-view-option monthly-view-option-daily">Daily averages</span>
+      </label>
+    </div>
+    <div class="chart-wrap"><svg id="chart-monthly-gas" width="100%" height="220"></svg></div>
+  </div>
+
+  <div class="card" id="card-temp-trend">
+    <h2>Average usage at each outdoor temperature</h2>
+    <div class="temp-trend-row">
+      <div class="temp-trend-label">Electricity</div>
+      <div class="chart-wrap"><svg id="chart-temp-trend-elec" width="100%" height="220"></svg></div>
+    </div>
+    <div class="temp-trend-row" style="margin-top:18px">
+      <div class="temp-trend-label">Gas</div>
+      <div class="chart-wrap"><svg id="chart-temp-trend-gas" width="100%" height="220"></svg></div>
+    </div>
+  </div>
+
+  <div class="card" id="card-temp-callout">
+    <div class="callout-row" id="callout-elec"></div>
+    <div class="callout-row" id="callout-gas"></div>
+  </div>
+  </div>
+
+  <div class="tab-panel" id="tab-ev" role="tabpanel" aria-labelledby="tab-btn-ev" hidden>
+  <div class="tab-options"><label class="weekday-toggle" id="ev-export-control"><input type="checkbox" id="ev-export-toggle" autocomplete="off"> Include this tab in exports</label></div>
+  <div class="card" id="card-ev">
+    <h2>Electric vehicle charging on an average weekday</h2>
+    <p class="sub" id="ev-bidir-note" style="display:none">You need a compatible car and home charger for bidirectional charging to work. This is a hypothetical evaluation.</p>
+    <div class="ev-verdict" id="ev-verdict" style="display:none"></div>
+    <div class="chart-controls">
+      <label class="monthly-view-toggle">
+        <input type="checkbox" class="ev-mode-input" id="ev-mode-toggle" autocomplete="off">
+        <span class="monthly-view-option ev-mode-option-charge">Charge only</span>
+        <span class="switch"><span class="switch-track"><span class="switch-thumb"></span></span></span>
+        <span class="monthly-view-option ev-mode-option-bidir">Bidirectional</span>
+      </label>
+    </div>
+    <div class="month-tabs" id="month-tabs-ev"></div>
+    <div class="legend">
+      <span class="legend-item"><span class="legend-key" style="background:var(--series-load)"></span>Avg weekday load (kWh)</span>
+      <span class="legend-item"><span class="legend-key" style="background:var(--series-pv)"></span>Avg PV production (kWh)</span>
+      <span class="legend-item"><span class="legend-key rect" style="background:var(--offset-fill)"></span>Potential offset (PV covers load)</span>
+      <span class="legend-item"><span class="legend-key rect" style="background:var(--surplus-fill)"></span>Surplus PV generation</span>
+      <span class="legend-item"><span class="legend-key rect hatch-ev"></span>EV charging (kWh)</span>
+      <span class="legend-item"><span class="legend-key dashed-ev"></span>Load + EV charging (kWh)</span>
+      <span class="legend-item" id="legend-ev-supply" style="display:none"><span class="legend-key rect" style="background:var(--ev-supply-fill)"></span>EV powering home</span>
+    </div>
+    <div class="chart-wrap"><svg id="chart-ev" width="100%" height="300"></svg></div>
+    <div class="ev-charge-fields" id="ev-charge-fields">
+      <div class="ev-field-groups">
+        <div class="ev-field-group">
+          <span class="ev-field-group-label">Commute</span>
+          <div class="ev-field-grid">
+            <label>Round-trip commute (mi)<input type="number" id="ev-distance" min="0" step="1" value="40" autocomplete="off"></label>
+            <label>Efficiency (mi/kWh)<input type="number" id="ev-efficiency" min="0.1" step="0.1" value="4" autocomplete="off"></label>
+            <label>Leaves home at<input type="time" id="ev-departure" step="3600" value="08:00" autocomplete="off"></label>
+            <label>Returns home at<input type="time" id="ev-return" step="3600" value="18:00" autocomplete="off"></label>
+          </div>
+        </div>
+        <div class="ev-field-group">
+          <span class="ev-field-group-label">Charging</span>
+          <div class="ev-field-grid">
+            <label>Charger rate (kW)<input type="number" id="ev-charger-rate" min="0.1" step="0.1" value="7.4" autocomplete="off"></label>
+            <label class="ev-charge-only-field" id="ev-start-field">Start charging at<input type="time" id="ev-start" step="3600" value="18:00" autocomplete="off"><span class="ev-field-error" id="ev-start-error" style="display:none">This time must be after the vehicle returns home</span></label>
+            <label class="ev-bidir-field">Battery size (kWh)<input type="number" id="ev-battery" min="1" step="1" value="40" autocomplete="off"></label>
+            <label class="ev-bidir-field">Always keep (%)<input type="number" id="ev-reserve" min="0" max="100" step="5" value="20" autocomplete="off"></label>
+            <label class="ev-bidir-field">Grid charging from<input type="time" id="ev-overnight-start" step="3600" value="22:00" autocomplete="off"></label>
+            <label class="ev-bidir-field">Round-trip efficiency (%)<input type="number" id="ev-round-trip" min="1" max="100" step="1" value="85" autocomplete="off"></label>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chart-wrap" id="ev-share-wrap" style="display:none; margin-top:18px">
+      <p class="sub" style="margin:8px 0 2px">Share of the electricity the home would otherwise draw from the grid (after solar) that the car could cover, by month</p>
+      <svg id="chart-ev-share" width="100%" height="150"></svg>
+    </div>
+  </div>
+  </div>
+
+  <footer class="notes">
+    <strong>Notes</strong>
+    <ul>
+      <li>If your data spans more than one year, months are averaged together.</li>
+    </ul>
+  </footer>
+  <div class="tooltip" id="tooltip"></div>
+</div>
+
+<script>
+// Captured before any rendering/DOM mutation happens, so it's a clean
+// pre-render snapshot -- see CLAUDE.md for why the export feature needs this
+// specific timing (the month-slider setup below does an unguarded
+// top-level appendChild that would double up if this were captured live).
+const PRISTINE_HTML = document.documentElement.outerHTML;
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+// Months are calendar-name aggregates spanning whatever years the source
+// data covers (see aggregateRawInterval), not tied to one specific year --
+// so a fixed non-leap-year day count is used for the daily-average toggle
+// rather than trying to track leap years per month.
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+// 1 therm = 100,000 BTU = 29.3001 kWh -- fixed physical conversion, not a
+// per-household or per-appliance efficiency figure.
+const THERM_TO_KWH = 29.3001;
+const DATA = {
+  months: MONTH_NAMES,
+  monthlyTotals: { load_kwh: null, gas_units: null, pv_kwh: null },
+  heatmaps: { load: null, pv: null, gas: null, loadWeekday: null, gasWeekday: null },
+  tempCallout: { elec: null, gas: null },
+  tempTrend: { elec: null, gas: null },
+};
+const EMPTY_DATA = JSON.parse(JSON.stringify(DATA));
+const root = document.getElementById('app');
+const tooltip = document.getElementById('tooltip');
+const svgNS = 'http://www.w3.org/2000/svg';
+
+function showTooltip(x, y, html) {
+  tooltip.innerHTML = html;
+  tooltip.style.left = x + 'px';
+  tooltip.style.top = (y - 10) + 'px';
+  tooltip.style.opacity = 1;
+}
+function hideTooltip() { tooltip.style.opacity = 0; }
+
+function el(tag, attrs) {
+  const e = document.createElementNS(svgNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+function cssVar(name) {
+  return getComputedStyle(root).getPropertyValue(name).trim();
+}
+
+// "Nice numbers for graph labels" (Heckbert): picks a round axis max/step
+// instead of dividing the raw max into 4 arbitrary, ugly-decimal ticks.
+function niceNumber(range, round) {
+  const exponent = Math.floor(Math.log10(range));
+  const fraction = range / Math.pow(10, exponent);
+  let niceFraction;
+  if (round) {
+    if (fraction < 1.5) niceFraction = 1;
+    else if (fraction < 3) niceFraction = 2;
+    else if (fraction < 7) niceFraction = 5;
+    else niceFraction = 10;
+  } else {
+    if (fraction <= 1) niceFraction = 1;
+    else if (fraction <= 2) niceFraction = 2;
+    else if (fraction <= 5) niceFraction = 5;
+    else niceFraction = 10;
+  }
+  return niceFraction * Math.pow(10, exponent);
+}
+function niceAxisTicks(maxDataValue, targetTicks) {
+  if (!(maxDataValue > 0)) return { max: 1, step: 0.25, count: 4 };
+  const step = niceNumber(maxDataValue / (targetTicks - 1), true);
+  const max = Math.ceil(maxDataValue / step) * step;
+  return { max, step, count: Math.round(max / step) };
+}
+
+function placeholderSvg(svgId, message) {
+  const svg = document.getElementById(svgId);
+  svg.innerHTML = '';
+  const H = svg.getAttribute('height') ? +svg.getAttribute('height') : 300;
+  svg.setAttribute('viewBox', `0 0 900 ${H}`);
+  const t = el('text', { x: 450, y: H / 2, 'text-anchor': 'middle', fill: cssVar('--text-muted'), 'font-size': 13 });
+  t.textContent = message;
+  svg.appendChild(t);
+}
+// ---------------------------------------------------------------------
+// Cold-weather callout stat (a plain-language alternative to the sidelined
+// usage-vs-temperature bar charts -- see CLAUDE.md)
+// ---------------------------------------------------------------------
+function renderColdCallout(containerId, hasDataset, missingDatasetMsg, coldShare, nounPhrase, seriesColorVar) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = '';
+  if (!hasDataset) {
+    el.innerHTML = `<p class="chart-placeholder">${missingDatasetMsg}</p>`;
+    return;
+  }
+  if (!coldShare) {
+    el.innerHTML = `<p class="chart-placeholder">This export doesn't include outdoor temperature (Weather) data.</p>`;
+    return;
+  }
+  if (coldShare.coldHours === 0 || coldShare.usageShare === null) {
+    el.innerHTML = `<p class="chart-placeholder">This export doesn't include any days below freezing, so a cold-weather comparison isn't available.</p>`;
+    return;
+  }
+  const usagePct = Math.round(coldShare.usageShare * 100);
+  const hourPct = Math.round(coldShare.hourShare * 100);
+  const hourPctSpan = `<strong class="callout-highlight">${hourPct}%</strong>`;
+  const tail = usagePct > hourPct + 3
+    ? `even though those days make up only ${hourPctSpan} of the year`
+    : `about the same share as how much of the year is that cold (${hourPctSpan})`;
+  el.innerHTML =
+    `<span class="callout-number" style="color:${cssVar(seriesColorVar)}">${usagePct}%</span>` +
+    `<p class="callout-text">of this home's ${nounPhrase} happens on days below freezing (32&deg;F), ${tail}.</p>`;
+}
+
+// ---------------------------------------------------------------------
+// Usage-vs-temperature trend line (smoothed per-degree average, no raw
+// scatter points -- thousands of dots read as noise to a non-technical
+// viewer, but the shape of the averaged line is the actual point)
+// ---------------------------------------------------------------------
+function drawTempTrendChart(svgId, points, opts) {
+  const svg = document.getElementById(svgId);
+  svg.innerHTML = '';
+  const W = 900, H = svg.getAttribute('height') ? +svg.getAttribute('height') : 220;
+  const marginL = 46, marginR = 16, marginT = 16, marginB = 28;
+  const plotW = W - marginL - marginR, plotH = H - marginT - marginB;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  const temps = points.map(p => p.temp);
+  const tMin = Math.min(...temps), tMax = Math.max(...temps);
+  const rawMax = Math.max(...points.map(p => p.value), 0.001);
+  const { max: maxVal, count: tickCount } = niceAxisTicks(rawMax, 5);
+  const xFor = t => marginL + ((t - tMin) / (tMax - tMin || 1)) * plotW;
+  const yFor = v => marginT + plotH - (v / maxVal) * plotH;
+
+  svg.appendChild(el('rect', {
+    x: marginL, y: marginT, width: plotW, height: plotH,
+    fill: cssVar('--surface-2'), stroke: cssVar('--border'), 'stroke-width': 1, rx: 4
+  }));
+
+  for (let i = 0; i <= tickCount; i++) {
+    const v = maxVal * i / tickCount;
+    const y = yFor(v);
+    if (i > 0) svg.appendChild(el('line', { x1: marginL, x2: W - marginR, y1: y, y2: y, class: 'grid-line' }));
+    const t = el('text', { x: marginL - 8, y: y + 3, class: 'axis-label', 'text-anchor': 'end' });
+    t.textContent = v % 1 === 0 ? v.toFixed(0) : v.toFixed(1);
+    svg.appendChild(t);
+  }
+
+  const xTickStep = 10;
+  for (let xt = Math.ceil(tMin / xTickStep) * xTickStep; xt <= tMax; xt += xTickStep) {
+    const x = xFor(xt);
+    svg.appendChild(el('line', { x1: x, x2: x, y1: marginT, y2: marginT + plotH, class: 'grid-line' }));
+    const t = el('text', { x, y: H - marginB + 16, class: 'axis-label', 'text-anchor': 'middle' });
+    t.textContent = xt + '°F';
+    svg.appendChild(t);
+  }
+  svg.appendChild(el('line', { x1: marginL, x2: marginL, y1: marginT, y2: marginT + plotH, class: 'baseline' }));
+  svg.appendChild(el('line', { x1: marginL, x2: W - marginR, y1: marginT + plotH, y2: marginT + plotH, class: 'baseline' }));
+
+  const pathPts = points.map(p => `${xFor(p.temp)},${yFor(p.value)}`).join(' L ');
+  svg.appendChild(el('path', {
+    d: `M ${pathPts}`, fill: 'none', stroke: opts.color, 'stroke-width': 4,
+    'stroke-linejoin': 'round', 'stroke-linecap': 'round'
+  }));
+
+  // hover crosshair, mirroring the load-vs-PV chart's hit-rect pattern but
+  // for a single series snapped to the nearest plotted degree
+  const hit = el('rect', { x: marginL, y: marginT, width: plotW, height: plotH, fill: 'transparent' });
+  const crosshair = el('line', { y1: marginT, y2: marginT + plotH, class: 'grid-line', style: 'display:none' });
+  const dot = el('circle', { r: 5, fill: opts.color, stroke: cssVar('--surface-1'), 'stroke-width': 2, style: 'display:none' });
+  svg.appendChild(crosshair);
+  svg.appendChild(dot);
+  svg.appendChild(hit);
+
+  hit.addEventListener('pointermove', (e) => {
+    const rect = svg.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width * W;
+    const t = tMin + ((px - marginL) / plotW) * (tMax - tMin);
+    let nearest = points[0], bestDiff = Infinity;
+    for (const p of points) {
+      const diff = Math.abs(p.temp - t);
+      if (diff < bestDiff) { bestDiff = diff; nearest = p; }
+    }
+    const nx = xFor(nearest.temp), ny = yFor(nearest.value);
+    crosshair.setAttribute('x1', nx); crosshair.setAttribute('x2', nx); crosshair.style.display = 'block';
+    dot.setAttribute('cx', nx); dot.setAttribute('cy', ny); dot.style.display = 'block';
+    showTooltip(e.clientX, e.clientY, `<strong>${nearest.value.toFixed(2)}</strong> ${opts.unit}<br>${nearest.temp}°F`);
+  });
+  hit.addEventListener('pointerleave', () => {
+    hideTooltip();
+    crosshair.style.display = 'none';
+    dot.style.display = 'none';
+  });
+}
+
+function renderTempTrendChart(svgId, hasDataset, missingDatasetMsg, trendData, opts) {
+  if (!hasDataset) { placeholderSvg(svgId, missingDatasetMsg); return; }
+  if (!trendData || !trendData.points || trendData.points.length < 2) {
+    placeholderSvg(svgId, "This export doesn't include enough outdoor temperature (Weather) data to show a trend");
+    return;
+  }
+  drawTempTrendChart(svgId, trendData.points, opts);
+}
+
+// ---------------------------------------------------------------------
+// Grouped bar chart (monthly electric: load vs pv)
+// ---------------------------------------------------------------------
+function drawGroupedBar(svgId, months, series, opts) {
+  const svg = document.getElementById(svgId);
+  svg.innerHTML = '';
+  const W = 900, H = svg.getAttribute('height') ? +svg.getAttribute('height') : 300;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const marginL = 42, marginR = 12, marginT = 14, marginB = 28;
+  const plotW = W - marginL - marginR, plotH = H - marginT - marginB;
+  const rawMax = Math.max(1, ...series.flatMap(s => s.values));
+  const { max: maxVal, count: ticks } = niceAxisTicks(rawMax, 5);
+  const groupW = plotW / months.length;
+  const barW = Math.min(24, (groupW - 10) / series.length);
+
+  // gridlines + y ticks
+  for (let i = 0; i <= ticks; i++) {
+    const v = maxVal * i / ticks;
+    const y = marginT + plotH - (v / maxVal) * plotH;
+    svg.appendChild(el('line', { x1: marginL, x2: W - marginR, y1: y, y2: y, class: i === 0 ? 'baseline' : 'grid-line' }));
+    const t = el('text', { x: marginL - 8, y: y + 3, class: 'axis-label', 'text-anchor': 'end' });
+    t.textContent = Math.round(v).toLocaleString();
+    svg.appendChild(t);
+  }
+
+  months.forEach((m, mi) => {
+    const groupX = marginL + mi * groupW;
+    series.forEach((s, si) => {
+      const v = s.values[mi];
+      const barH = (v / maxVal) * plotH;
+      const x = groupX + (groupW - series.length * barW) / 2 + si * barW;
+      const y = marginT + plotH - barH;
+      const rect = el('rect', {
+        x: x + 1, y, width: Math.max(0, barW - 2), height: Math.max(0, barH),
+        rx: 3, fill: s.color, 'data-m': m, 'data-v': v.toLocaleString(undefined,{maximumFractionDigits:1}), 'data-s': s.label
+      });
+      rect.addEventListener('pointermove', (e) => {
+        showTooltip(e.clientX, e.clientY, `<strong>${rect.dataset.v}</strong> ${opts.unit || ''}<br>${rect.dataset.s} · ${rect.dataset.m}`);
+        rect.setAttribute('opacity', 0.85);
+      });
+      rect.addEventListener('pointerleave', () => { hideTooltip(); rect.setAttribute('opacity', 1); });
+      svg.appendChild(rect);
+    });
+    const t = el('text', { x: groupX + groupW / 2, y: H - marginB + 16, class: 'axis-label', 'text-anchor': 'middle' });
+    t.textContent = m.slice(0, 3);
+    svg.appendChild(t);
+  });
+}
+
+// ---------------------------------------------------------------------
+// Load vs PV line/area chart, per selected month
+// ---------------------------------------------------------------------
+let selectedMonth = 'July';
+let weekdayOnly = false;
+const weekdayToggle = document.getElementById('weekday-toggle');
+weekdayToggle.addEventListener('change', () => {
+  weekdayOnly = weekdayToggle.checked;
+  drawLoadVsPv(selectedMonth);
+});
+
+// UI-only toggle, not part of DATA -- same pattern as weekdayOnly above, so
+// it isn't reset by "Clear loaded data" (there's nothing to reset back to;
+// unchecked is already the default) and naturally reverts to its default
+// (off) in an exported snapshot, same as weekdayOnly/selectedMonth.
+let gasCompoundOn = false;
+let lastLoadPvRenderMax = null; // see drawLoadVsPv/animateAxisTransition
+const gasCompoundToggle = document.getElementById('gas-compound-toggle');
+// A reload can leave the checkbox showing checked (browser-restored state)
+// while gasCompoundOn -- and therefore what actually renders -- stays false,
+// since no 'change' event fires on that restore. Force them back in sync,
+// same fix as monthlyViewToggleElec/-Gas below.
+gasCompoundToggle.checked = gasCompoundOn;
+gasCompoundToggle.addEventListener('change', () => {
+  const fromMax = lastLoadPvRenderMax;
+  gasCompoundOn = gasCompoundToggle.checked;
+  animateAxisTransition(fromMax);
+});
+
+// Toggles that change what a chart plots switch it between fixed y-axis
+// scales (see loadPvAxisMax / evAxisMax) -- snapping straight to a new scale
+// read as a jarring jump, so this slides between them instead. Each chart's
+// draw function already redraws from scratch on every call, and every
+// position in it derives from one scale value (opts.renderMax) -- so all
+// this needs to do is call it repeatedly with an interpolated scale, no
+// per-element animation logic required. One animator per chart, so an
+// in-flight transition on one never cancels the other's.
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+function createAxisAnimator(draw) {
+  let frame = null;
+  return function animate(fromMax, toMax) {
+    if (frame !== null) { cancelAnimationFrame(frame); frame = null; }
+    if (fromMax == null || toMax === fromMax) { draw(); return; }
+    const duration = 300;
+    const start = performance.now();
+    function step(now) {
+      const t = Math.min(1, (now - start) / duration);
+      draw(fromMax + (toMax - fromMax) * easeOutCubic(t));
+      frame = t < 1 ? requestAnimationFrame(step) : null;
+    }
+    frame = requestAnimationFrame(step);
+  };
+}
+const animateLoadPvAxis = createAxisAnimator(renderMax =>
+  drawLoadVsPv(selectedMonth, renderMax === undefined ? undefined : { renderMax }));
+function animateAxisTransition(fromMax) {
+  const hasGasData = !!DATA.monthlyTotals.gas_units;
+  const toMax = niceAxisTicks(Math.max(loadPvAxisMax(gasCompoundOn && hasGasData), 0.001), 5).max;
+  animateLoadPvAxis(fromMax, toMax);
+}
+
+// One month slider per hourly chart (Household profile tab and Electric
+// vehicle tab), sharing a single selectedMonth so switching tabs keeps the
+// same month in view. Built at top level, before anything renders -- see
+// the PRISTINE_HTML note at the top of this script.
+const monthSliders = [];
+function createMonthSlider(container) {
+  const label = document.createElement('div');
+  label.className = 'month-slider-label';
+  label.textContent = selectedMonth;
+
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.className = 'month-slider';
+  slider.min = '0';
+  slider.max = String(DATA.months.length - 1);
+  slider.step = '1';
+  slider.value = String(DATA.months.indexOf(selectedMonth));
+  slider.setAttribute('aria-label', 'Select month to view hourly detail for');
+  // fires continuously while dragging, so the chart updates live as you slide
+  slider.addEventListener('input', () => setSelectedMonth(Number(slider.value)));
+
+  const tickRow = document.createElement('div');
+  tickRow.className = 'month-slider-ticks';
+  const tickEls = {};
+  DATA.months.forEach((m, i) => {
+    const t = document.createElement('span');
+    t.textContent = m.slice(0, 3);
+    if (m === selectedMonth) t.classList.add('active');
+    t.addEventListener('click', () => setSelectedMonth(i));
+    tickEls[m] = t;
+    tickRow.appendChild(t);
+  });
+
+  container.appendChild(label);
+  container.appendChild(slider);
+  container.appendChild(tickRow);
+  monthSliders.push({
+    sync(prev, next) {
+      tickEls[prev].classList.remove('active');
+      tickEls[next].classList.add('active');
+      label.textContent = next;
+      slider.value = String(DATA.months.indexOf(next));
+    },
+  });
+}
+function setSelectedMonth(i) {
+  const m = DATA.months[i];
+  if (m === selectedMonth) return;
+  const prev = selectedMonth;
+  selectedMonth = m;
+  monthSliders.forEach(s => s.sync(prev, m));
+  if (DATA.monthlyTotals.load_kwh && DATA.monthlyTotals.pv_kwh) {
+    drawLoadVsPv(selectedMonth);
+    drawEvChart(selectedMonth);
+  }
+}
+createMonthSlider(document.getElementById('month-tabs'));
+createMonthSlider(document.getElementById('month-tabs-ev'));
+
+// Fixed y-axis scale(s) for the load-vs-PV chart, spanning every month (and
+// both weekday-only states) rather than whatever the currently-selected
+// month/weekday-toggle happens to need -- so switching months or the
+// weekday toggle rescales nothing, and bar/line heights stay directly
+// comparable across the whole year.
+//
+// Two separate fixed scales are kept -- one for gas-compound off, one for
+// on -- rather than a single scale sized to fit the (taller) gas-compound
+// case: sharing one scale left plain load-vs-PV data squished into the
+// bottom of the chart whenever gas was toggled off. Each scale is still
+// fixed *within* its own toggle state, so switching months while gas is
+// (say) off never rescales -- only flipping the gas toggle itself does,
+// and that's a legitimate change of what's being plotted, not a like-for-
+// like comparison. Recomputed from current DATA on every draw call
+// (cheap: a handful of 12x24 arrays), not cached, so it always reflects
+// whatever's currently loaded.
+function loadPvAxisMax(includeGasCompound) {
+  const loadArrays = [DATA.heatmaps.load, DATA.heatmaps.loadWeekday].filter(Boolean);
+  let max = 0;
+  for (const load of loadArrays) {
+    for (const monthVals of load) {
+      for (const v of monthVals) if (v > max) max = v;
+    }
+  }
+  if (DATA.heatmaps.pv) {
+    for (const monthVals of DATA.heatmaps.pv) {
+      for (const v of monthVals) if (v > max) max = v;
+    }
+  }
+  if (includeGasCompound) {
+    const gasArrays = [DATA.heatmaps.gas, DATA.heatmaps.gasWeekday].filter(Boolean);
+    for (const load of loadArrays) {
+      for (const gas of gasArrays) {
+        for (let mi = 0; mi < load.length; mi++) {
+          for (let h = 0; h < load[mi].length; h++) {
+            const v = load[mi][h] + gas[mi][h] * THERM_TO_KWH;
+            if (v > max) max = v;
+          }
+        }
+      }
+    }
+  }
+  return max;
+}
+
+// ---------------------------------------------------------------------
+// Shared hourly-chart pieces (Household profile load-vs-PV chart and the
+// Electric vehicle tab's chart draw the same 24-hour frame, fills, and
+// overlay bands; only what's layered on top differs)
+// ---------------------------------------------------------------------
+// 25 x positions (0..24): hour 24 is hour 0 of the next day, so the lines
+// and fills run through the 23:00-0:00 interval and the daily cycle closes
+// instead of stopping at 23:00. Series arrays stay 24 long; helpers read
+// them through wrap() (index 24 -> index 0).
+const HOURS = Array.from({ length: 25 }, (_, h) => h);
+const wrap = arr => HOURS.map(h => arr[h % 24]);
+
+// Background panel, y gridlines/ticks, hour gridlines/labels, and axis
+// spines. niceMax/tickCount set what tick VALUES get printed; maxVal is the
+// scale actually used for positioning. Normally they're identical, but an
+// axis animator passes an interpolated renderMax while sliding between
+// fixed scales, so gridline/line/band *positions* tween smoothly while the
+// printed tick numbers stay put rather than flickering through intermediate
+// values.
+function drawHourlyFrame(svg, niceMax, tickCount, maxVal) {
+  const W = 900, H = 300, marginL = 46, marginR = 16, marginT = 16, marginB = 28;
+  const plotW = W - marginL - marginR, plotH = H - marginT - marginB;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const xFor = h => marginL + (h / 24) * plotW;
+  const yFor = v => marginT + plotH - (v / maxVal) * plotH;
+
+  // plot-area background, so the chart reads as a distinct panel rather than
+  // floating gridlines on the bare card background
+  svg.appendChild(el('rect', {
+    x: marginL, y: marginT, width: plotW, height: plotH,
+    fill: cssVar('--surface-2'), stroke: cssVar('--border'), 'stroke-width': 1, rx: 4
+  }));
+
+  for (let i = 0; i <= tickCount; i++) {
+    const v = niceMax * i / tickCount;
+    const y = yFor(v);
+    if (i > 0) svg.appendChild(el('line', { x1: marginL, x2: W - marginR, y1: y, y2: y, class: 'grid-line' }));
+    const t = el('text', { x: marginL - 8, y: y + 3, class: 'axis-label', 'text-anchor': 'end' });
+    t.textContent = v % 1 === 0 ? v.toFixed(0) : v.toFixed(1);
+    svg.appendChild(t);
+  }
+  [6,12,18].forEach(h => {
+    svg.appendChild(el('line', { x1: xFor(h), x2: xFor(h), y1: marginT, y2: marginT + plotH, class: 'grid-line' }));
+  });
+  [0,6,12,18,24].forEach(h => {
+    const t = el('text', { x: xFor(h), y: H - marginB + 16, class: 'axis-label', 'text-anchor': 'middle' });
+    t.textContent = h + ':00';
+    svg.appendChild(t);
+  });
+  // axis frame (left + bottom spines), drawn bolder than the interior gridlines
+  svg.appendChild(el('line', { x1: marginL, x2: marginL, y1: marginT, y2: marginT + plotH, class: 'baseline' }));
+  svg.appendChild(el('line', { x1: marginL, x2: W - marginR, y1: marginT + plotH, y2: marginT + plotH, class: 'baseline' }));
+  return { W, H, marginL, marginR, marginT, marginB, plotW, plotH, xFor, yFor };
+}
+
+// Offset (PV covers load) and surplus (PV beyond load) fills.
+// Fill boundaries need a vertex exactly where the load/pv lines cross, not
+// just at the 24 hourly samples -- otherwise the straight chord between two
+// endpoint minima cuts across the actual (later/earlier) crossing point,
+// letting the surplus fill spill past the load line near a crossover.
+function drawOffsetSurplusFills(svg, load, pv, g) {
+  const { xFor, yFor } = g;
+  load = wrap(load); pv = wrap(pv);
+  const crossingPts = [];
+  for (let i = 0; i < HOURS.length; i++) {
+    crossingPts.push({ hour: HOURS[i], load: load[i], pv: pv[i] });
+    if (i < HOURS.length - 1) {
+      const diff0 = load[i] - pv[i];
+      const diff1 = load[i + 1] - pv[i + 1];
+      if (diff0 !== 0 && diff1 !== 0 && (diff0 > 0) !== (diff1 > 0)) {
+        const t = diff0 / (diff0 - diff1);
+        crossingPts.push({
+          hour: HOURS[i] + t * (HOURS[i + 1] - HOURS[i]),
+          load: load[i] + t * (load[i + 1] - load[i]),
+          pv: pv[i] + t * (pv[i + 1] - pv[i]),
+        });
+      }
+    }
+  }
+  const overlapPts = crossingPts.map(p => ({ hour: p.hour, v: Math.min(p.load, p.pv) }));
+
+  // shaded overlap = min(load, pv) -> the self-consumption potential
+  const areaPts = overlapPts.map(p => `${xFor(p.hour)},${yFor(p.v)}`).join(' L ');
+  const areaBottom = overlapPts.slice().reverse().map(p => `${xFor(p.hour)},${yFor(0)}`).join(' L ');
+  svg.appendChild(el('path', {
+    d: `M ${areaPts} L ${areaBottom} Z`,
+    fill: cssVar('--offset-fill'), opacity: 0.85, stroke: 'none'
+  }));
+
+  // shaded surplus = pv - load where pv exceeds load (zero-height elsewhere,
+  // since overlapTop == pv at those hours)
+  const surplusTopPts = crossingPts.map(p => `${xFor(p.hour)},${yFor(p.pv)}`).join(' L ');
+  const surplusBottomPts = overlapPts.slice().reverse().map(p => `${xFor(p.hour)},${yFor(p.v)}`).join(' L ');
+  svg.appendChild(el('path', {
+    d: `M ${surplusTopPts} L ${surplusBottomPts} Z`,
+    fill: cssVar('--surplus-fill'), opacity: 0.85, stroke: 'none'
+  }));
+}
+
+function drawHourlyLine(svg, values, color, g) {
+  const pts = HOURS.map((h, i) => `${g.xFor(h)},${g.yFor(values[h % 24])}`).join(' L ');
+  svg.appendChild(el('path', { d: `M ${pts}`, fill: 'none', stroke: color, 'stroke-width': 3, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+}
+
+// Solid fill between two hourly series (bottom <= top at every hour).
+function drawHourlyBand(svg, bottom, top, fill, g) {
+  const topPts = HOURS.map(h => `${g.xFor(h)},${g.yFor(top[h % 24])}`).join(' L ');
+  const bottomPts = HOURS.slice().reverse().map(h => `${g.xFor(h)},${g.yFor(bottom[h % 24])}`).join(' L ');
+  svg.appendChild(el('path', { d: `M ${topPts} L ${bottomPts} Z`, fill, opacity: 0.85, stroke: 'none' }));
+}
+
+// "Compounded but differentiated" overlay: a hatch-filled band between
+// `bottom` and `top` plus a dashed line along `top`, both in one series
+// color. Drawn last (on top of the load/PV lines and the offset/surplus
+// fills) so it always reads as an annotation layered onto the existing
+// chart rather than another solid fill competing with the green/gold
+// offset-surplus semantics already in this space. A hatch (not a solid
+// fill) is used for the same reason -- it lets whatever's underneath show
+// through instead of occluding it. patternId must be unique in the page.
+function drawHatchOverlay(svg, patternId, colorVar, bottom, top, g) {
+  const defs = el('defs', {});
+  const pattern = el('pattern', {
+    id: patternId, patternUnits: 'userSpaceOnUse', width: 6, height: 6, patternTransform: 'rotate(45)'
+  });
+  pattern.appendChild(el('rect', { width: 6, height: 6, fill: 'transparent' }));
+  pattern.appendChild(el('line', { x1: 0, y1: 0, x2: 0, y2: 6, stroke: cssVar(colorVar), 'stroke-width': 3 }));
+  defs.appendChild(pattern);
+  svg.appendChild(defs);
+
+  const bandTopPts = HOURS.map(h => `${g.xFor(h)},${g.yFor(top[h % 24])}`).join(' L ');
+  const bandBottomPts = HOURS.slice().reverse().map(h => `${g.xFor(h)},${g.yFor(bottom[h % 24])}`).join(' L ');
+  svg.appendChild(el('path', {
+    d: `M ${bandTopPts} L ${bandBottomPts} Z`,
+    fill: `url(#${patternId})`, stroke: 'none'
+  }));
+
+  svg.appendChild(el('path', {
+    d: `M ${bandTopPts}`, fill: 'none', stroke: cssVar(colorVar), 'stroke-width': 3,
+    'stroke-dasharray': '6 4', 'stroke-linejoin': 'round', 'stroke-linecap': 'round'
+  }));
+}
+
+function drawLoadVsPv(month, opts) {
+  const svg = document.getElementById('chart-load-pv');
+  svg.innerHTML = '';
+  const mi = DATA.months.indexOf(month);
+  // PV isn't filtered by weekday: PVWatts has no real calendar dates behind
+  // its Month/Hour rows (a simulated typical year), so there's no weekday
+  // concept to restrict it to -- only the metered load series is affected.
+  const loadMatrix = (weekdayOnly && DATA.heatmaps.loadWeekday) ? DATA.heatmaps.loadWeekday : DATA.heatmaps.load;
+  const d = {
+    hour: HOURS.slice(0, 24),
+    load: loadMatrix[mi],
+    pv: DATA.heatmaps.pv[mi],
+  };
+
+  // "Compounded but differentiated" gas overlay: stacks gas usage (converted
+  // therms -> kWh) on top of the load line as a second, visually distinct
+  // series, rather than merging it into the load values themselves --
+  // DATA.heatmaps.gas/.gasWeekday are populated on every gas upload but
+  // otherwise unused elsewhere in this file. The control stays visible but
+  // disabled until gas data actually exists, rather than being hidden
+  // outright -- so it reads the same "not available yet" way as every other
+  // checkbox in this row instead of appearing/disappearing.
+  const hasGasData = !!DATA.monthlyTotals.gas_units;
+  gasCompoundToggle.disabled = !hasGasData;
+  const showGasCompound = gasCompoundOn && hasGasData;
+  document.getElementById('legend-gas-compound-fill').style.display = showGasCompound ? '' : 'none';
+  document.getElementById('legend-gas-compound-line').style.display = showGasCompound ? '' : 'none';
+  let gasKwh = null, compound = null;
+  if (showGasCompound) {
+    const gasMatrix = (weekdayOnly && DATA.heatmaps.gasWeekday) ? DATA.heatmaps.gasWeekday : DATA.heatmaps.gas;
+    gasKwh = gasMatrix[mi].map(v => v * THERM_TO_KWH);
+    compound = d.load.map((v, i) => v + gasKwh[i]);
+  }
+
+  const rawMax = Math.max(loadPvAxisMax(showGasCompound), 0.001);
+  const { max: niceMax, count: tickCount } = niceAxisTicks(rawMax, 5);
+  const maxVal = (opts && typeof opts.renderMax === 'number') ? opts.renderMax : niceMax;
+  // Tracks whatever's actually on screen right now (equal to niceMax at
+  // rest, or the current mid-tween value while the axis animator is
+  // running) -- read as the animation's start point, so a toggle click
+  // during an in-flight transition continues smoothly from the true
+  // current position instead of jumping back to the previous resting scale.
+  lastLoadPvRenderMax = maxVal;
+  const g = drawHourlyFrame(svg, niceMax, tickCount, maxVal);
+  const { W, marginL, marginT, plotW, plotH, xFor, yFor } = g;
+
+  drawOffsetSurplusFills(svg, d.load, d.pv, g);
+  drawHourlyLine(svg, d.load, cssVar('--series-load'), g);
+  drawHourlyLine(svg, d.pv, cssVar('--series-pv'), g);
+  if (showGasCompound) drawHatchOverlay(svg, 'gas-hatch-pattern', '--series-gas', d.load, compound, g);
+
+  // crosshair + hit layer
+  const hit = el('rect', { x: marginL, y: marginT, width: plotW, height: plotH, fill: 'transparent' });
+  const crosshair = el('line', { y1: marginT, y2: marginT + plotH, class: 'grid-line', style: 'display:none' });
+
+  const loadColor = cssVar('--series-load'), pvColor = cssVar('--series-pv'), gasColor = cssVar('--series-gas'), surfaceColor = cssVar('--surface-1'), inkColor = cssVar('--text-primary');
+  const loadDot = el('circle', { r: 5, fill: loadColor, stroke: surfaceColor, 'stroke-width': 2, style: 'display:none' });
+  const pvDot = el('circle', { r: 5, fill: pvColor, stroke: surfaceColor, 'stroke-width': 2, style: 'display:none' });
+  const loadLabel = el('text', { class: 'axis-label', 'font-size': 13, fill: inkColor, 'text-anchor': 'middle', style: 'display:none' });
+  const pvLabel = el('text', { class: 'axis-label', 'font-size': 13, fill: inkColor, 'text-anchor': 'middle', style: 'display:none' });
+  // Only relevant when showGasCompound is on -- the compound total gets its
+  // own crosshair dot/label (a diamond, not a circle, so it reads as "the
+  // stacked total" rather than a third same-shaped series marker).
+  const compoundDot = el('rect', { width: 8, height: 8, fill: gasColor, stroke: surfaceColor, 'stroke-width': 2, transform: 'rotate(45)', style: 'display:none' });
+  const compoundLabel = el('text', { class: 'axis-label', 'font-size': 13, fill: inkColor, 'text-anchor': 'middle', style: 'display:none' });
+
+  svg.appendChild(crosshair);
+  svg.appendChild(loadDot);
+  svg.appendChild(pvDot);
+  svg.appendChild(loadLabel);
+  svg.appendChild(pvLabel);
+  if (showGasCompound) {
+    svg.appendChild(compoundDot);
+    svg.appendChild(compoundLabel);
+  }
+  svg.appendChild(hit);
+
+  hit.addEventListener('pointermove', (e) => {
+    const rect = svg.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width * W;
+    const h = Math.round(((px - marginL) / plotW) * 24);
+    const hc = Math.max(0, Math.min(23, h));
+    const lv = d.load[hc], pvv = d.pv[hc];
+    const lx = xFor(hc), ly = yFor(lv), py = yFor(pvv);
+
+    crosshair.setAttribute('x1', lx);
+    crosshair.setAttribute('x2', lx);
+    crosshair.style.display = 'block';
+
+    loadDot.setAttribute('cx', lx); loadDot.setAttribute('cy', ly); loadDot.style.display = 'block';
+    pvDot.setAttribute('cx', lx); pvDot.setAttribute('cy', py); pvDot.style.display = 'block';
+
+    // place each value label on the side away from the other series so they
+    // don't collide when the two lines are close together or crossing
+    const loadAbove = lv >= pvv;
+    loadLabel.setAttribute('x', lx);
+    loadLabel.setAttribute('y', loadAbove ? ly - 10 : ly + 16);
+    loadLabel.textContent = lv.toFixed(2) + ' kWh';
+    loadLabel.style.display = 'block';
+
+    pvLabel.setAttribute('x', lx);
+    pvLabel.setAttribute('y', loadAbove ? py + 16 : py - 10);
+    pvLabel.textContent = pvv.toFixed(2) + ' kWh';
+    pvLabel.style.display = 'block';
+
+    let tooltipHtml = `<strong>${hc}:00</strong><br>Load: ${lv.toFixed(2)} kWh<br>PV: ${pvv.toFixed(2)} kWh`;
+
+    if (showGasCompound) {
+      const gv = gasKwh[hc], cv = compound[hc], cy = yFor(cv);
+      compoundDot.setAttribute('x', lx - 4); compoundDot.setAttribute('y', cy - 4);
+      compoundDot.setAttribute('transform', `rotate(45 ${lx} ${cy})`);
+      compoundDot.style.display = 'block';
+      compoundLabel.setAttribute('x', lx);
+      compoundLabel.setAttribute('y', cy - 12);
+      compoundLabel.textContent = 'Total ' + cv.toFixed(2) + ' kWh';
+      compoundLabel.style.display = 'block';
+      tooltipHtml += `<br>Gas (kWh equiv.): ${gv.toFixed(2)} kWh<br>Load + gas: ${cv.toFixed(2)} kWh`;
+    }
+
+    showTooltip(e.clientX, e.clientY, tooltipHtml);
+  });
+  hit.addEventListener('pointerleave', () => {
+    hideTooltip();
+    crosshair.style.display = 'none';
+    loadDot.style.display = 'none';
+    pvDot.style.display = 'none';
+    loadLabel.style.display = 'none';
+    pvLabel.style.display = 'none';
+    compoundDot.style.display = 'none';
+    compoundLabel.style.display = 'none';
+  });
+}
+
+// =====================================================================
+// Electric vehicle tab
+// =====================================================================
+// Always plots the average WEEKDAY load: commute schedules are a weekday
+// pattern, so overlaying modeled charging onto an all-days average would
+// misrepresent weekends that never had this commute (see CLAUDE.md).
+//
+// Two modes, switched by #ev-mode-toggle:
+//  - Charge only: the car just adds load -- enough grid charging to cover
+//    one round-trip commute, starting at a set hour (computeEvChargeKwh).
+//  - Bidirectional (vehicle-to-home): the car also soaks up surplus solar
+//    while it's home and powers the house whenever load exceeds solar, down
+//    to a reserve it always keeps, then tops up from the grid in a set
+//    window so it can make the next commute (simulateBidirectionalDay).
+//
+// All settings are UI state read straight from the inputs, not part of
+// DATA. They're kept across "Clear" (like the other toggles) and carried
+// into an export via getEvSettings/applyEvSettings.
+let evBidirOn = false;
+let lastEvRenderMax = null;
+const evModeToggle = document.getElementById('ev-mode-toggle');
+const evExportToggle = document.getElementById('ev-export-toggle');
+const EV_INPUT_IDS = [
+  'ev-distance', 'ev-efficiency', 'ev-departure', 'ev-return', 'ev-charger-rate', 'ev-start',
+  'ev-battery', 'ev-reserve', 'ev-overnight-start', 'ev-round-trip',
+];
+const evInputs = Object.fromEntries(EV_INPUT_IDS.map(id => [id, document.getElementById(id)]));
+// Same browser-restored-checkbox-state fix as gasCompoundToggle above.
+evModeToggle.checked = evBidirOn;
+evExportToggle.checked = false;
+
+function updateEvModeUi() {
+  document.querySelectorAll('.ev-bidir-field').forEach(n => { n.style.display = evBidirOn ? '' : 'none'; });
+  document.querySelectorAll('.ev-charge-only-field').forEach(n => { n.style.display = evBidirOn ? 'none' : ''; });
+  document.getElementById('ev-bidir-note').style.display = evBidirOn ? '' : 'none';
+  document.getElementById('legend-ev-supply').style.display = evBidirOn ? '' : 'none';
+}
+updateEvModeUi();
+
+// EV settings go back to their defaults (the value="" written in the
+// markup) on page load and on every upload, so a new household never
+// starts from the last one's numbers. The load-time reset is needed
+// because a plain reload lets browsers restore typed-in values; the
+// fields also carry autocomplete="off" for the same reason.
+function resetEvSettings() {
+  EV_INPUT_IDS.forEach(id => { evInputs[id].value = evInputs[id].defaultValue; });
+}
+resetEvSettings();
+
+const animateEvAxis = createAxisAnimator(renderMax =>
+  drawEvChart(selectedMonth, renderMax === undefined ? undefined : { renderMax }));
+evModeToggle.addEventListener('change', () => {
+  evBidirOn = evModeToggle.checked;
+  updateEvModeUi();
+  redrawEvChartAnimated();
+});
+// Live feedback as the numbers change is the point of these controls
+// (letting someone see how shifting a time changes the picture) -- 'input'
+// rather than 'change' so it updates as you type/spin, not just on blur.
+// Settings can change the fixed axis scale too, so these slide as well.
+EV_INPUT_IDS.forEach(id => evInputs[id].addEventListener('input', redrawEvChartAnimated));
+
+// Up/down arrows next to every EV field, so values (especially times) can
+// be clicked through instead of retyped. Built here rather than in the
+// markup to keep it short; PRISTINE_HTML is captured before this runs, so
+// an export gets clean markup and its own copy of this script adds them.
+// Times step one hour and wrap past midnight; numbers use the field's own
+// step/min/max via stepUp()/stepDown(). Each click fires 'input' so the
+// chart redraws exactly as if the value had been typed.
+const EV_STEP_REPEAT_DELAY_MS = 400, EV_STEP_REPEAT_START_MS = 150, EV_STEP_REPEAT_MIN_MS = 40;
+let evStepTimer = null;
+function stopEvStepRepeat() { clearTimeout(evStepTimer); evStepTimer = null; }
+window.addEventListener('blur', stopEvStepRepeat);
+function stepEvInput(input, dir) {
+  if (input.type === 'time') {
+    const h = timeInputHour(input);
+    const next = ((Number.isFinite(h) ? h + dir : 0) + 24) % 24;
+    input.value = String(next).padStart(2, '0') + ':00';
+  } else {
+    if (input.value === '') input.value = input.min || '0';
+    else if (dir > 0) input.stepUp(); else input.stepDown();
+  }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+EV_INPUT_IDS.forEach(id => {
+  const input = evInputs[id];
+  if (input.parentElement.classList.contains('stepper')) return;
+  const box = document.createElement('span');
+  box.className = 'stepper';
+  input.replaceWith(box);
+  box.appendChild(input);
+  const btns = document.createElement('span');
+  btns.className = 'stepper-btns';
+  const later = input.type === 'time';
+  [[1, '▲', later ? 'One hour later' : 'Increase'], [-1, '▼', later ? 'One hour earlier' : 'Decrease']].forEach(([dir, glyph, label]) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'stepper-btn';
+    b.textContent = glyph;
+    b.setAttribute('aria-label', label);
+    // A button inside a <label> would otherwise also focus the input on
+    // click; preventDefault keeps focus where it was.
+    b.addEventListener('mousedown', e => e.preventDefault());
+    // Press and hold to repeat: one step right away, then after a short
+    // pause it repeats, speeding up the longer it's held.
+    b.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      stopEvStepRepeat();
+      stepEvInput(input, dir);
+      let interval = EV_STEP_REPEAT_START_MS;
+      const tick = () => {
+        stepEvInput(input, dir);
+        interval = Math.max(EV_STEP_REPEAT_MIN_MS, interval * 0.85);
+        evStepTimer = setTimeout(tick, interval);
+      };
+      evStepTimer = setTimeout(tick, EV_STEP_REPEAT_DELAY_MS);
+    });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => b.addEventListener(t, stopEvStepRepeat));
+    // Pointer presses are handled above; this is only for keyboard
+    // activation (Enter/Space), whose click has detail 0.
+    b.addEventListener('click', e => { e.preventDefault(); if (e.detail === 0) stepEvInput(input, dir); });
+    btns.appendChild(b);
+  });
+  box.appendChild(btns);
+});
+function redrawEvChartAnimated() {
+  if (!(DATA.monthlyTotals.load_kwh && DATA.monthlyTotals.pv_kwh)) return;
+  animateEvAxis(lastEvRenderMax, evAxisScale().max);
+}
+
+// For carrying the tab's current settings into an exported copy.
+function getEvSettings() {
+  const values = {};
+  EV_INPUT_IDS.forEach(id => { values[id] = evInputs[id].value; });
+  return { bidirectional: evBidirOn, values };
+}
+function applyEvSettings(s) {
+  EV_INPUT_IDS.forEach(id => { if (id in s.values) evInputs[id].value = s.values[id]; });
+  evBidirOn = !!s.bidirectional;
+  evModeToggle.checked = evBidirOn;
+  updateEvModeUi();
+}
+
+// Reads an <input type="time"> field (native "HH:MM" value, or "" if
+// empty/unset) down to its hour -- step="3600" on these fields keeps the
+// native picker itself hour-only, so truncating rather than rounding here
+// never actually discards any minutes a user picked.
+function timeInputHour(input) {
+  const v = input.value;
+  if (!v) return NaN;
+  const h = parseInt(v.slice(0, 2), 10);
+  return Number.isFinite(h) ? h : NaN;
+}
+// Whether hour h falls in the half-open window [from, to), wrapping past
+// midnight when to < from. An empty window (from === to) contains nothing.
+function hourInWindow(h, from, to) {
+  if (from === to) return false;
+  return from < to ? (h >= from && h < to) : (h >= from || h < to);
+}
+
+function readEvSettings() {
+  const num = id => Number(evInputs[id].value);
+  const hour = id => timeInputHour(evInputs[id]);
+  return {
+    distance: num('ev-distance'), efficiency: num('ev-efficiency'), rate: num('ev-charger-rate'),
+    departure: hour('ev-departure'), ret: hour('ev-return'), start: hour('ev-start'),
+    battery: num('ev-battery'), reservePct: num('ev-reserve'),
+    gridStart: hour('ev-overnight-start'),
+    roundTripPct: num('ev-round-trip'),
+  };
+}
+
+// Charge-only model: kWh needed for one round-trip commute = distance /
+// efficiency, scheduled at a constant charger rate starting at the user-set
+// hour -- but only across hours the car is actually home (outside
+// [departure, return)), stopping once it runs into the next commute rather
+// than wrapping the remainder. Returns one 24-hour kWh array, the same for
+// every month (no seasonal variation in scope for v1), and whether the
+// charge finished before the car has to leave again.
+function computeEvChargeKwh(s) {
+  const kwh = new Array(24).fill(0);
+  if (!(s.distance > 0) || !(s.efficiency > 0) || !(s.rate > 0) ||
+      !Number.isFinite(s.departure) || !Number.isFinite(s.ret) || !Number.isFinite(s.start)) {
+    return { kwh, fits: true };
+  }
+  let needed = s.distance / s.efficiency;
+  let h = s.start;
+  for (let steps = 0; steps < 24 && needed > 0.0001; steps++) {
+    if (hourInWindow(h, s.departure, s.ret)) break;
+    const add = Math.min(s.rate, needed);
+    kwh[h] += add;
+    needed -= add;
+    h = (h + 1) % 24;
+  }
+  return { kwh, fits: needed <= 0.0001 };
+}
+
+// Bidirectional (vehicle-to-home) model for one average weekday of one
+// month, hour by hour. The idea is "store spare solar in the car, use it
+// when the sun's down": the car only gives the house energy it won't have
+// to buy back from the grid. The car:
+//  - uses distance / efficiency kWh on the commute, all at the departure
+//    hour, and is unavailable while away;
+//  - while home, first soaks up any surplus solar (up to the charger rate
+//    and the battery's capacity);
+//  - powers the house when load exceeds solar, but only from charge above
+//    what it will need at its next departure (commute + "always keep"
+//    reserve), minus the surplus solar it can still soak up at home before
+//    then -- anything below that line would just be bought back from the
+//    grid later, which only makes sense with time-of-use rates we don't
+//    model;
+//  - charges from the grid only in the grid-charging window (its start
+//    hour until departure), and only up to that same line -- or at any hour
+//    if it's somehow below the reserve.
+// Charger rate caps both directions. Round-trip losses are all taken on
+// discharge (the house receives drawn x efficiency) -- a simplification,
+// but the per-cycle total comes out the same.
+//
+// The day's result depends on the charge the car starts it with, so the
+// same day is repeated until it settles into a steady daily cycle, and the
+// last pass is what's returned.
+function simulateBidirectionalDay(load, pv, s) {
+  const zeros = () => new Array(24).fill(0);
+  const empty = { gridCharge: zeros(), solarCharge: zeros(), supplied: zeros(), soc: zeros(), home: zeros().map(() => true), problem: null };
+  if (!(s.distance >= 0) || !(s.efficiency > 0) || !(s.rate > 0) || !(s.battery > 0) ||
+      !(s.reservePct >= 0 && s.reservePct <= 100) ||
+      !(s.roundTripPct > 0 && s.roundTripPct <= 100) ||
+      !Number.isFinite(s.departure) || !Number.isFinite(s.ret) || !Number.isFinite(s.gridStart)) {
+    return { ...empty, problem: 'Check charging option inputs' };
+  }
+  const cap = s.battery;
+  const need = s.distance / s.efficiency;
+  const reserve = cap * s.reservePct / 100;
+  const eff = s.roundTripPct / 100;
+  const commutes = s.departure !== s.ret;
+  if (commutes && need + reserve > cap + 1e-9) {
+    return { ...empty, problem: 'The commute usage and "Always keep" amount add up to more than the battery\'s capacity.' };
+  }
+  // Surplus solar the car can still soak up after hour h and before it
+  // next leaves (it's home that whole stretch, since it's home at h).
+  const solarAhead = zeros();
+  if (commutes) {
+    for (let h = 0; h < 24; h++) {
+      for (let k = (h + 1) % 24; k !== s.departure; k = (k + 1) % 24) {
+        solarAhead[h] += Math.min(Math.max(0, pv[k] - load[k]), s.rate);
+      }
+    }
+  }
+  const keepLevel = h => commutes ? Math.max(reserve, need + reserve - solarAhead[h]) : reserve;
+
+  let soc = commutes ? need + reserve : reserve;
+  let result = null;
+  for (let day = 0; day < 20; day++) {
+    const r = { gridCharge: zeros(), solarCharge: zeros(), supplied: zeros(), soc: zeros(), home: zeros().map(() => true), problem: null };
+    for (let h = 0; h < 24; h++) {
+      if (commutes && h === s.departure) {
+        if (soc < need + reserve - 0.01) r.problem = 'Not enough time to charge the car before it leaves';
+        soc = Math.max(0, soc - need);
+      }
+      if (commutes && hourInWindow(h, s.departure, s.ret)) {
+        r.home[h] = false;
+        r.soc[h] = soc;
+        continue;
+      }
+      const keep = keepLevel(h);
+      let rateLeft = s.rate;
+      const surplus = pv[h] - load[h];
+      if (surplus > 0) {
+        const c = Math.min(surplus, rateLeft, cap - soc);
+        if (c > 0) { soc += c; rateLeft -= c; r.solarCharge[h] = c; }
+      }
+      const gridTarget = hourInWindow(h, s.gridStart, s.departure) ? keep : reserve;
+      if (soc < gridTarget) {
+        const c = Math.min(rateLeft, gridTarget - soc);
+        if (c > 0) { soc += c; r.gridCharge[h] = c; }
+      } else if (surplus < 0 && soc > keep) {
+        const drawn = Math.min(rateLeft, soc - keep, -surplus / eff);
+        if (drawn > 0) { soc -= drawn; r.supplied[h] = drawn * eff; }
+      }
+      r.soc[h] = soc;
+    }
+    result = r;
+  }
+  return result;
+}
+
+// Everything drawEvChart and evAxisMax need for one month, in either mode.
+function evMonthModel(mi) {
+  const load = (DATA.heatmaps.loadWeekday || DATA.heatmaps.load)[mi];
+  const pv = DATA.heatmaps.pv[mi];
+  const s = readEvSettings();
+  if (!evBidirOn) {
+    // Starting while the car is still away would charge nothing at all;
+    // flagged on the field itself rather than as a general warning.
+    if ([s.start, s.departure, s.ret].every(Number.isFinite) && hourInWindow(s.start, s.departure, s.ret)) {
+      const zeros = new Array(24).fill(0);
+      return { load, pv, s, charge: zeros, gridCharge: zeros, solarCharge: zeros, supplied: zeros, soc: null, home: null, problem: null, startBeforeHome: true };
+    }
+    const { kwh, fits } = computeEvChargeKwh(s);
+    return { load, pv, s, charge: kwh, gridCharge: kwh, solarCharge: new Array(24).fill(0), supplied: new Array(24).fill(0), soc: null, home: null, problem: fits ? null : 'Time input error' };
+  }
+  const sim = simulateBidirectionalDay(load, pv, s);
+  return { load, pv, s, charge: sim.gridCharge.map((g, h) => g + sim.solarCharge[h]), ...sim };
+}
+
+// Fixed y-axis scale for the EV chart: every month's weekday load, PV, and
+// load + EV charging under the current mode and settings -- same "don't
+// rescale when switching months" rule as loadPvAxisMax.
+function evAxisMax() {
+  let max = 0;
+  for (let mi = 0; mi < 12; mi++) {
+    const m = evMonthModel(mi);
+    for (let h = 0; h < 24; h++) max = Math.max(max, m.load[h] + m.charge[h], m.pv[h]);
+  }
+  return max;
+}
+// Snug axis for the EV chart: the shared niceAxisTicks rounds up to a step
+// of 1/2/5 x 10^n, which can leave a big empty band on top. This picks the
+// smallest max reachable with a 1/2/2.5/5 step and 4-6 intervals. Only
+// grows past what load and PV need when the car's charging actually
+// reaches above them (in some month), since the scale is shared by all months.
+function evAxisScale() {
+  const raw = Math.max(evAxisMax(), 0.001);
+  let best = null;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)) - 1);
+  for (let e = 0; e < 3; e++) {
+    for (const f of [1, 2, 2.5, 5]) {
+      const step = f * mag * Math.pow(10, e);
+      const count = Math.ceil(raw / step - 1e-9);
+      if (count < 4 || count > 6) continue;
+      const max = count * step;
+      if (!best || max < best.max - 1e-9) best = { max, step, count };
+    }
+  }
+  return best || niceAxisTicks(raw, 5);
+}
+
+// Plain-language verdict for bidirectional mode, so a schedule that
+// doesn't suit it says so clearly instead of just drawing an empty band.
+// A month "works well" when the car covers at least EV_GOOD_MONTH_SHARE of
+// the electricity the home would otherwise draw from the grid after solar
+// -- a judgment call, picked so a month with only a sliver of help doesn't
+// get listed as a success.
+const EV_GOOD_MONTH_SHARE = 0.15;
+// ['May','June','July','October'] -> 'May–July and October'. Wraps around
+// the year, so ['November','December','January'] -> 'November–January'.
+function formatMonthRanges(indices) {
+  const set = new Set(indices);
+  if (set.size === 12) return 'every month';
+  const runs = [];
+  // start each run at a month whose previous month isn't in the set
+  for (let i = 0; i < 12; i++) {
+    if (!set.has(i) || set.has((i + 11) % 12)) continue;
+    let end = i;
+    while (set.has((end + 1) % 12)) end = (end + 1) % 12;
+    runs.push(end === i ? DATA.months[i] : `${DATA.months[i]}–${DATA.months[end]}`);
+  }
+  return runs.length > 1 ? runs.slice(0, -1).join(', ') + ' and ' + runs[runs.length - 1] : runs[0];
+}
+// Share of a month's grid draw (load beyond solar, summed over the day)
+// that the car supplies. A month whose settings can't work counts as 0.
+function evMonthShare(m) {
+  if (m.problem) return 0;
+  const supplied = m.supplied.reduce((a, b) => a + b, 0);
+  const gridNeed = m.load.reduce((a, l, h) => a + Math.max(0, l - m.pv[h]), 0);
+  return gridNeed > 0 ? supplied / gridNeed : 0;
+}
+function drawEvShareChart(selectedIdx) {
+  const svg = document.getElementById('chart-ev-share');
+  svg.innerHTML = '';
+  const shares = [];
+  for (let mi = 0; mi < 12; mi++) shares.push(evMonthShare(evMonthModel(mi)));
+  const W = 900, H = 150, marginL = 46, marginR = 16, marginT = 16, marginB = 24;
+  const plotW = W - marginL - marginR, plotH = H - marginT - marginB;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const top = Math.max(niceAxisTicks(Math.max(...shares, EV_GOOD_MONTH_SHARE) * 100, 3).max, 1);
+  const yFor = v => marginT + plotH - (v / top) * plotH;
+  svg.appendChild(el('rect', { x: marginL, y: marginT, width: plotW, height: plotH, fill: cssVar('--surface-2'), stroke: cssVar('--border') }));
+  [0, top / 2, top].forEach(v => {
+    const t = el('text', { x: marginL - 8, y: yFor(v) + 3, class: 'axis-label', 'text-anchor': 'end' });
+    t.textContent = Math.round(v) + '%';
+    svg.appendChild(t);
+    if (v > 0) svg.appendChild(el('line', { x1: marginL, x2: W - marginR, y1: yFor(v), y2: yFor(v), class: 'grid-line' }));
+  });
+  const slot = plotW / 12, bw = slot * 0.6;
+  shares.forEach((sh, i) => {
+    const x = marginL + slot * i + (slot - bw) / 2, y = yFor(sh * 100);
+    svg.appendChild(el('rect', { x, y, width: bw, height: marginT + plotH - y, fill: cssVar(i === selectedIdx ? '--series-ev' : '--ev-supply-fill') }));
+    const v = el('text', { x: x + bw / 2, y: y - 4, class: 'axis-label', 'text-anchor': 'middle' });
+    v.textContent = Math.round(sh * 100) + '%';
+    svg.appendChild(v);
+    const m = el('text', { x: x + bw / 2, y: H - 8, class: 'axis-label', 'text-anchor': 'middle' });
+    m.textContent = DATA.months[i].slice(0, 3);
+    svg.appendChild(m);
+  });
+  // threshold for what the headline counts as "works well"
+  const ty = yFor(EV_GOOD_MONTH_SHARE * 100);
+  svg.appendChild(el('line', { x1: marginL, x2: W - marginR, y1: ty, y2: ty, class: 'ev-marker-line', 'stroke-dasharray': '4 3' }));
+  const tl = el('text', { x: W - marginR - 4, y: ty - 4, class: 'ev-marker-label', 'text-anchor': 'end' });
+  tl.textContent = `${EV_GOOD_MONTH_SHARE * 100}% = counted as "works well"`;
+  svg.appendChild(tl);
+}
+function evBidirVerdictHtml() {
+  const good = [], poor = [];
+  let bestShare = 0;
+  for (let mi = 0; mi < 12; mi++) {
+    const m = evMonthModel(mi);
+    // A month whose settings can't work doesn't work well either. (The
+    // current month's own problem is shown in the box instead of this.)
+    if (m.problem) { poor.push(mi); continue; }
+    const share = evMonthShare(m);
+    (share >= EV_GOOD_MONTH_SHARE ? good : poor).push(mi);
+    bestShare = Math.max(bestShare, share);
+  }
+  const pct = Math.round(bestShare * 100);
+  const headline = text => `<span class="ev-verdict-headline">${text}</span>`;
+  if (!good.length) {
+    return headline(`With this commute schedule, bidirectional charging wouldn't help your household much.`) +
+      `There isn't enough stored solar power left after the commute to power the home. ` +
+      `Bidirectional charging using solar works best when the car is home during the sunniest part of the day.`;
+  }
+  const covers = `the car can store surplus solar and use it to cover up to <strong>${pct}%</strong> of what would otherwise be drawn from the grid`;
+  if (!poor.length) return headline(`Bidirectional charging would work well in every month of the year!`) + `In every month, ${covers}.`;
+  return headline(`Bidirectional charging would only work well in ${formatMonthRanges(good)}.`) +
+    `In those months, ${covers}. <strong>It would not help in ${formatMonthRanges(poor)}.</strong>`;
+}
+
+function drawEvChart(month, opts) {
+  const svg = document.getElementById('chart-ev');
+  svg.innerHTML = '';
+  const mi = DATA.months.indexOf(month);
+  const m = evMonthModel(mi);
+  document.getElementById('ev-start-field').classList.toggle('ev-field-invalid', !!m.startBeforeHome);
+  document.getElementById('ev-start-error').style.display = m.startBeforeHome ? '' : 'none';
+  // A settings problem (either mode) replaces the verdict in its box.
+  const verdictEl = document.getElementById('ev-verdict');
+  const problemText = m.problem ? m.problem.replace(/\.?\s*$/, '.') : '';
+  const verdict = m.problem
+    ? `<span class="ev-verdict-headline">Configuration error:</span><span class="ev-problem-detail">${problemText}</span>`
+    : (evBidirOn ? evBidirVerdictHtml() : null);
+  verdictEl.classList.toggle('is-problem', !!m.problem);
+  verdictEl.innerHTML = verdict || '';
+  verdictEl.style.display = verdict ? '' : 'none';
+  const shareWrap = document.getElementById('ev-share-wrap');
+  shareWrap.style.display = evBidirOn ? '' : 'none';
+  if (evBidirOn) drawEvShareChart(mi);
+
+  const { max: niceMax, count: tickCount } = evAxisScale();
+  const maxVal = (opts && typeof opts.renderMax === 'number') ? opts.renderMax : niceMax;
+  lastEvRenderMax = maxVal;
+  const g = drawHourlyFrame(svg, niceMax, tickCount, maxVal);
+  const { W, marginL, marginT, plotW, plotH, xFor, yFor } = g;
+
+  const withCharge = m.load.map((v, h) => v + m.charge[h]);
+  drawOffsetSurplusFills(svg, m.load, m.pv, g);
+  // EV powering the home: fills part of the gap between the PV line and
+  // the load line (the part the grid would otherwise supply), the same way
+  // the green offset fill shows the part PV covers. supplied never exceeds
+  // load - pv at any hour, so this band never dips below the PV line.
+  if (evBidirOn) drawHourlyBand(svg, m.load.map((v, h) => v - m.supplied[h]), m.load, cssVar('--ev-supply-fill'), g);
+  drawHourlyLine(svg, m.load, cssVar('--series-load'), g);
+  drawHourlyLine(svg, m.pv, cssVar('--series-pv'), g);
+  drawHatchOverlay(svg, 'ev-hatch-pattern', '--series-ev', m.load, withCharge, g);
+
+  // Schedule markers (leaves / home / charging starts) as thin dashed
+  // vertical lines -- see the .ev-marker-line CSS note for why violet.
+  const markers = [
+    { hour: m.s.departure, label: 'Leaves' },
+    { hour: m.s.ret, label: 'Home' },
+    evBidirOn ? { hour: m.s.gridStart, label: 'Grid charging' } : { hour: m.s.start, label: 'Charging' },
+  ].filter(mk => Number.isFinite(mk.hour));
+  // Markers that land on the same hour (start-charging is often the same
+  // hour as arriving home) share one line and stack their labels instead
+  // of drawing two identical lines on top of each other.
+  const markerGroups = new Map();
+  markers.forEach(mk => {
+    if (!markerGroups.has(mk.hour)) markerGroups.set(mk.hour, []);
+    markerGroups.get(mk.hour).push(mk.label);
+  });
+  markerGroups.forEach((labels, hour) => {
+    const x = xFor(hour);
+    svg.appendChild(el('line', {
+      x1: x, x2: x, y1: marginT, y2: marginT + plotH,
+      class: 'ev-marker-line', 'stroke-dasharray': '4 3'
+    }));
+    // Flip the label to the line's left near the right edge of the plot
+    // so it doesn't clip past the chart boundary.
+    const nearRightEdge = x > marginL + plotW - 60;
+    labels.forEach((label, i) => {
+      const t = el('text', {
+        x: nearRightEdge ? x - 4 : x + 4, y: marginT + 11 + i * 11,
+        class: 'ev-marker-label', 'text-anchor': nearRightEdge ? 'end' : 'start'
+      });
+      t.textContent = label;
+      svg.appendChild(t);
+    });
+  });
+
+  // crosshair + hit layer: dots on load and PV, a diamond on load + EV
+  // charging (same "stacked total" marker as the gas overlay), and the full
+  // breakdown in the tooltip.
+  const hit = el('rect', { x: marginL, y: marginT, width: plotW, height: plotH, fill: 'transparent' });
+  const crosshair = el('line', { y1: marginT, y2: marginT + plotH, class: 'grid-line', style: 'display:none' });
+  const surfaceColor = cssVar('--surface-1');
+  const loadDot = el('circle', { r: 5, fill: cssVar('--series-load'), stroke: surfaceColor, 'stroke-width': 2, style: 'display:none' });
+  const pvDot = el('circle', { r: 5, fill: cssVar('--series-pv'), stroke: surfaceColor, 'stroke-width': 2, style: 'display:none' });
+  const evDot = el('rect', { width: 8, height: 8, fill: cssVar('--series-ev'), stroke: surfaceColor, 'stroke-width': 2, style: 'display:none' });
+  [crosshair, loadDot, pvDot, evDot, hit].forEach(n => svg.appendChild(n));
+
+  hit.addEventListener('pointermove', (e) => {
+    const rect = svg.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width * W;
+    const hc = Math.max(0, Math.min(23, Math.round(((px - marginL) / plotW) * 24)));
+    const lx = xFor(hc);
+    crosshair.setAttribute('x1', lx); crosshair.setAttribute('x2', lx); crosshair.style.display = 'block';
+    loadDot.setAttribute('cx', lx); loadDot.setAttribute('cy', yFor(m.load[hc])); loadDot.style.display = 'block';
+    pvDot.setAttribute('cx', lx); pvDot.setAttribute('cy', yFor(m.pv[hc])); pvDot.style.display = 'block';
+    const ey = yFor(withCharge[hc]);
+    evDot.setAttribute('x', lx - 4); evDot.setAttribute('y', ey - 4);
+    evDot.setAttribute('transform', `rotate(45 ${lx} ${ey})`);
+    evDot.style.display = m.charge[hc] > 0 ? 'block' : 'none';
+
+    const f = v => v.toFixed(2) + ' kWh';
+    let html = `<strong>${hc}:00</strong><br>Load: ${f(m.load[hc])}<br>PV: ${f(m.pv[hc])}`;
+    if (m.charge[hc] > 0) {
+      html += `<br>EV charging: ${f(m.charge[hc])}`;
+      if (evBidirOn) html += ` (solar ${m.solarCharge[hc].toFixed(2)}, grid ${m.gridCharge[hc].toFixed(2)})`;
+    }
+    if (evBidirOn) {
+      if (m.supplied[hc] > 0) html += `<br>EV powering home: ${f(m.supplied[hc])}`;
+      const fromGrid = Math.max(0, m.load[hc] - m.pv[hc] - m.supplied[hc]) + m.gridCharge[hc];
+      html += `<br>From the grid: ${f(fromGrid)}`;
+      html += m.home[hc]
+        ? `<br>Car battery: ${Math.round(m.soc[hc] / m.s.battery * 100)}%`
+        : '<br>Car away';
+    }
+    showTooltip(e.clientX, e.clientY, html);
+  });
+  hit.addEventListener('pointerleave', () => {
+    hideTooltip();
+    [crosshair, loadDot, pvDot, evDot].forEach(n => { n.style.display = 'none'; });
+  });
+}
+
+// Tabs. Charts draw into a fixed 900-wide viewBox rather than measuring
+// their container, so drawing into a hidden tab is fine -- nothing needs
+// redrawing when a tab is shown.
+function showTab(panelId) {
+  document.querySelectorAll('#tab-bar .tab').forEach(btn => {
+    const active = btn.getAttribute('aria-controls') === panelId;
+    btn.setAttribute('aria-selected', String(active));
+    document.getElementById(btn.getAttribute('aria-controls')).hidden = !active;
+  });
+  document.documentElement.dataset.tab = panelId; // drives the page-background shift
+  hideTooltip();
+}
+document.querySelectorAll('#tab-bar .tab').forEach(btn => {
+  btn.addEventListener('click', () => showTab(btn.getAttribute('aria-controls')));
+});
+
+function setCheckChip(id, loaded, label) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('loaded', loaded);
+  el.innerHTML = `<span class="chip-icon">${loaded ? '✓' : '○'}</span> ${label}${loaded ? ' loaded' : ''}`;
+}
+
+function updateUploadChecks() {
+  setCheckChip('chip-electric', !!DATA.monthlyTotals.load_kwh, 'Electric usage');
+  setCheckChip('chip-gas', !!DATA.monthlyTotals.gas_units, 'Gas usage');
+  setCheckChip('chip-pv', !!DATA.monthlyTotals.pv_kwh, 'Solar (PV) potential');
+}
+
+// Monthly bar charts (household load / PV / gas) default to daily averages
+// -- each month's total divided by that month's day count -- since a raw
+// monthly total isn't apples-to-apples across months of different lengths
+// (e.g. 28 vs. 31 days); the toggle switches back to raw totals. Kept as a
+// display-time transform rather than a second DATA field, since the
+// underlying totals never change.
+let showMonthlyDailyAvg = true;
+function monthlyDisplayValues(values) {
+  if (!showMonthlyDailyAvg) return values;
+  return values.map((v, i) => Math.round((v / DAYS_IN_MONTH[i]) * 100) / 100);
+}
+const monthlyViewToggleElec = document.getElementById('monthly-view-toggle-elec');
+const monthlyViewToggleGas = document.getElementById('monthly-view-toggle-gas');
+// Force both checkboxes to match showMonthlyDailyAvg rather than trusting
+// the HTML `checked` attribute alone: browsers restore a form control's
+// prior checked state across a plain reload of the same page, which would
+// silently override this default the moment a user had ever left it off.
+monthlyViewToggleElec.checked = showMonthlyDailyAvg;
+monthlyViewToggleGas.checked = showMonthlyDailyAvg;
+document.querySelectorAll('.monthly-view-toggle-input').forEach((input) => {
+  input.addEventListener('change', () => {
+    showMonthlyDailyAvg = input.checked;
+    monthlyViewToggleElec.checked = showMonthlyDailyAvg;
+    monthlyViewToggleGas.checked = showMonthlyDailyAvg;
+    renderAll();
+  });
+});
+
+function renderAll() {
+  updateUploadChecks();
+  const hasLoad = !!DATA.monthlyTotals.load_kwh;
+  const hasPv = !!DATA.monthlyTotals.pv_kwh;
+  const hasGas = !!DATA.monthlyTotals.gas_units;
+  document.getElementById('export-btn').disabled = !(hasLoad || hasPv || hasGas);
+
+  const monthlyLabel = showMonthlyDailyAvg ? 'daily avg' : 'total';
+  document.getElementById('legend-monthly-elec-unit').textContent = `${monthlyLabel} kWh${showMonthlyDailyAvg ? '/day' : ' per month'}`;
+  document.getElementById('legend-monthly-pv-unit').textContent = `${monthlyLabel} kWh${showMonthlyDailyAvg ? '/day' : ' per month'}`;
+
+  if (hasLoad || hasPv) {
+    const series = [];
+    if (hasLoad) series.push({ label: 'Household load', values: monthlyDisplayValues(DATA.monthlyTotals.load_kwh), color: cssVar('--series-load') });
+    if (hasPv) series.push({ label: 'PV potential', values: monthlyDisplayValues(DATA.monthlyTotals.pv_kwh), color: cssVar('--series-pv') });
+    drawGroupedBar('chart-monthly-elec', DATA.months, series, { unit: showMonthlyDailyAvg ? 'kWh/day' : 'kWh' });
+  } else {
+    placeholderSvg('chart-monthly-elec', 'Upload an electric usage or PVWatts export above to see this chart');
+  }
+
+  if (hasGas) {
+    drawGroupedBar('chart-monthly-gas', DATA.months, [
+      { label: 'Gas usage', values: monthlyDisplayValues(DATA.monthlyTotals.gas_units), color: cssVar('--series-gas') },
+    ], { unit: showMonthlyDailyAvg ? 'therms/day' : 'therms' });
+  } else {
+    placeholderSvg('chart-monthly-gas', 'Upload a gas usage export above to see this chart');
+  }
+
+  renderTempTrendChart('chart-temp-trend-elec', hasLoad, 'Upload an electric usage export above to see this chart', DATA.tempTrend.elec, { color: cssVar('--series-load'), unit: 'kWh' });
+  renderTempTrendChart('chart-temp-trend-gas', hasGas, 'Upload a gas usage export above to see this chart', DATA.tempTrend.gas, { color: cssVar('--series-gas'), unit: 'therms' });
+
+  renderColdCallout('callout-elec', hasLoad, 'Upload an electric usage export above to see this insight', DATA.tempCallout.elec, 'electricity use', '--series-load');
+  renderColdCallout('callout-gas', hasGas, 'Upload a gas usage export above to see this insight', DATA.tempCallout.gas, 'gas use', '--series-gas');
+
+  if (hasLoad && hasPv) {
+    drawLoadVsPv(selectedMonth);
+    drawEvChart(selectedMonth);
+  } else {
+    placeholderSvg('chart-load-pv', 'Drop both an electric usage export and a PVWatts export above to see this chart');
+    gasCompoundToggle.disabled = true;
+    document.getElementById('legend-gas-compound-fill').style.display = 'none';
+    document.getElementById('legend-gas-compound-line').style.display = 'none';
+    placeholderSvg('chart-ev', 'Upload both an electric usage export and a PVWatts export above to see this chart');
+    document.getElementById('ev-verdict').style.display = 'none';
+    document.getElementById('ev-share-wrap').style.display = 'none';
+    document.getElementById('ev-start-field').classList.remove('ev-field-invalid');
+    document.getElementById('ev-start-error').style.display = 'none';
+    lastEvRenderMax = null;
+  }
+}
+
+renderAll();
+
+// =======================================================================
+// Load a different household's .csv or .ods export, entirely client-side.
+//
+// Both readers produce the same { sheetName: { headers, rows } } shape, so
+// classification and aggregation below are shared. A .csv file is one
+// "sheet" named after the file. An .ods file is a zip archive containing an
+// XML file (content.xml); to keep this dashboard a single offline HTML file
+// (no bundled third-party libraries, no network calls), this section
+// implements, from scratch: a zip central-directory reader, a raw DEFLATE
+// (RFC 1951) decompressor, and an ODS content.xml walker. Verified against
+// real multi-thousand-row NYSEG/PVWatts .ods exports before shipping.
+// =======================================================================
+
+// ---- ZIP central directory -------------------------------------------
+function readZipEntries(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const EOCD_SIG = 0x06054b50;
+  let eocdOffset = -1;
+  const minOffset = Math.max(0, bytes.length - 22 - 65535);
+  for (let i = bytes.length - 22; i >= minOffset; i--) {
+    if (view.getUint32(i, true) === EOCD_SIG) { eocdOffset = i; break; }
+  }
+  if (eocdOffset === -1) throw new Error('not a valid .ods/zip file (no End Of Central Directory record found)');
+
+  const entryCount = view.getUint16(eocdOffset + 10, true);
+  const centralDirOffset = view.getUint32(eocdOffset + 16, true);
+
+  const entries = {};
+  let p = centralDirOffset;
+  const CDH_SIG = 0x02014b50;
+  for (let i = 0; i < entryCount; i++) {
+    if (view.getUint32(p, true) !== CDH_SIG) throw new Error('corrupt zip central directory');
+    const method = view.getUint16(p + 10, true);
+    const compressedSize = view.getUint32(p + 20, true);
+    const uncompressedSize = view.getUint32(p + 24, true);
+    const nameLen = view.getUint16(p + 28, true);
+    const extraLen = view.getUint16(p + 30, true);
+    const commentLen = view.getUint16(p + 32, true);
+    const localHeaderOffset = view.getUint32(p + 42, true);
+    const name = new TextDecoder('utf-8').decode(bytes.subarray(p + 46, p + 46 + nameLen));
+    entries[name] = { method, compressedSize, uncompressedSize, localHeaderOffset };
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
+function extractZipEntry(bytes, entry) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const LFH_SIG = 0x04034b50;
+  const off = entry.localHeaderOffset;
+  if (view.getUint32(off, true) !== LFH_SIG) throw new Error('corrupt zip local file header');
+  const nameLen = view.getUint16(off + 26, true);
+  const extraLen = view.getUint16(off + 28, true);
+  const dataStart = off + 30 + nameLen + extraLen;
+  const compressed = bytes.subarray(dataStart, dataStart + entry.compressedSize);
+  if (entry.method === 0) return compressed.slice();
+  if (entry.method === 8) return inflateRaw(compressed, entry.uncompressedSize);
+  throw new Error('unsupported zip compression method: ' + entry.method);
+}
+
+// ---- raw DEFLATE decompression (RFC 1951) ------------------------------
+const LENGTH_BASE = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+const LENGTH_EXTRA = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+const DIST_BASE = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+const DIST_EXTRA = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+const CLC_ORDER = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+
+function buildHuffman(codeLengths) {
+  const maxBits = Math.max(0, ...codeLengths);
+  const blCount = new Array(maxBits + 1).fill(0);
+  for (const len of codeLengths) if (len > 0) blCount[len]++;
+  const nextCode = new Array(maxBits + 1).fill(0);
+  let code = 0;
+  for (let bits = 1; bits <= maxBits; bits++) {
+    code = (code + blCount[bits - 1]) << 1;
+    nextCode[bits] = code;
+  }
+  const map = new Map();
+  for (let sym = 0; sym < codeLengths.length; sym++) {
+    const len = codeLengths[sym];
+    if (len === 0) continue;
+    map.set(len + ':' + nextCode[len], sym);
+    nextCode[len]++;
+  }
+  return { map, maxBits };
+}
+
+function inflateRaw(compressed, expectedSize) {
+  let outBuf = new Uint8Array(expectedSize > 0 ? expectedSize : compressed.length * 4);
+  let outPos = 0;
+  function ensure(n) {
+    if (outPos + n <= outBuf.length) return;
+    let newLen = outBuf.length * 2;
+    while (newLen < outPos + n) newLen *= 2;
+    const grown = new Uint8Array(newLen);
+    grown.set(outBuf.subarray(0, outPos));
+    outBuf = grown;
+  }
+
+  let bitPos = 0;
+  const totalBits = compressed.length * 8;
+  function readBit() {
+    const byte = compressed[bitPos >>> 3];
+    const bit = (byte >>> (bitPos & 7)) & 1;
+    bitPos++;
+    return bit;
+  }
+  function readBits(n) {
+    let v = 0;
+    for (let i = 0; i < n; i++) v |= readBit() << i;
+    return v;
+  }
+  function alignToByte() { bitPos = (bitPos + 7) & ~7; }
+  function decodeSymbol(table) {
+    let code = 0, len = 0;
+    while (len <= table.maxBits) {
+      code = (code << 1) | readBit();
+      len++;
+      const sym = table.map.get(len + ':' + code);
+      if (sym !== undefined) return sym;
+    }
+    throw new Error('invalid Huffman code while inflating (corrupt or unsupported .ods file)');
+  }
+
+  let fixedLit = null, fixedDist = null;
+  function getFixedTables() {
+    if (fixedLit) return [fixedLit, fixedDist];
+    const litLens = new Array(288);
+    for (let i = 0; i <= 143; i++) litLens[i] = 8;
+    for (let i = 144; i <= 255; i++) litLens[i] = 9;
+    for (let i = 256; i <= 279; i++) litLens[i] = 7;
+    for (let i = 280; i <= 287; i++) litLens[i] = 8;
+    const distLens = new Array(30).fill(5);
+    fixedLit = buildHuffman(litLens);
+    fixedDist = buildHuffman(distLens);
+    return [fixedLit, fixedDist];
+  }
+
+  function writeByte(b) { ensure(1); outBuf[outPos++] = b; }
+  function copyMatch(distance, length) {
+    ensure(length);
+    let src = outPos - distance;
+    for (let i = 0; i < length; i++) { outBuf[outPos] = outBuf[src]; outPos++; src++; }
+  }
+
+  let final = false;
+  while (!final && bitPos < totalBits) {
+    final = readBit() === 1;
+    const type = readBits(2);
+    if (type === 0) {
+      alignToByte();
+      const bytePos = bitPos >>> 3;
+      const len = compressed[bytePos] | (compressed[bytePos + 1] << 8);
+      const dataStart = bytePos + 4;
+      ensure(len);
+      outBuf.set(compressed.subarray(dataStart, dataStart + len), outPos);
+      outPos += len;
+      bitPos = (dataStart + len) * 8;
+    } else if (type === 1 || type === 2) {
+      let litTable, distTable;
+      if (type === 1) {
+        [litTable, distTable] = getFixedTables();
+      } else {
+        const hlit = readBits(5) + 257;
+        const hdist = readBits(5) + 1;
+        const hclen = readBits(4) + 4;
+        const clcLengths = new Array(19).fill(0);
+        for (let i = 0; i < hclen; i++) clcLengths[CLC_ORDER[i]] = readBits(3);
+        const clcTable = buildHuffman(clcLengths);
+        const allLengths = [];
+        while (allLengths.length < hlit + hdist) {
+          const sym = decodeSymbol(clcTable);
+          if (sym <= 15) {
+            allLengths.push(sym);
+          } else if (sym === 16) {
+            const repeat = readBits(2) + 3;
+            const prev = allLengths[allLengths.length - 1];
+            for (let i = 0; i < repeat; i++) allLengths.push(prev);
+          } else if (sym === 17) {
+            const repeat = readBits(3) + 3;
+            for (let i = 0; i < repeat; i++) allLengths.push(0);
+          } else if (sym === 18) {
+            const repeat = readBits(7) + 11;
+            for (let i = 0; i < repeat; i++) allLengths.push(0);
+          } else {
+            throw new Error('bad code-length symbol (corrupt .ods file)');
+          }
+        }
+        litTable = buildHuffman(allLengths.slice(0, hlit));
+        distTable = buildHuffman(allLengths.slice(hlit, hlit + hdist));
+      }
+
+      while (true) {
+        const sym = decodeSymbol(litTable);
+        if (sym < 256) {
+          writeByte(sym);
+        } else if (sym === 256) {
+          break;
+        } else {
+          const li = sym - 257;
+          const length = LENGTH_BASE[li] + readBits(LENGTH_EXTRA[li]);
+          const distSym = decodeSymbol(distTable);
+          const distance = DIST_BASE[distSym] + readBits(DIST_EXTRA[distSym]);
+          copyMatch(distance, length);
+        }
+      }
+    } else {
+      throw new Error('reserved DEFLATE block type encountered (corrupt .ods file)');
+    }
+  }
+  return outBuf.subarray(0, outPos);
+}
+
+// ---- ODS content.xml -> { sheetName: { headers, rows } } ---------------
+const TABLE_NS = 'urn:oasis:names:tc:opendocument:xmlns:table:1.0';
+const OFFICE_NS = 'urn:oasis:names:tc:opendocument:xmlns:office:1.0';
+const TEXT_NS = 'urn:oasis:names:tc:opendocument:xmlns:text:1.0';
+const MAX_COLS = 60;
+
+function cellValue(cellEl) {
+  const valueType = cellEl.getAttributeNS(OFFICE_NS, 'value-type');
+  if (!valueType) return '';
+  if (valueType === 'float' || valueType === 'percentage' || valueType === 'currency') {
+    const v = cellEl.getAttributeNS(OFFICE_NS, 'value');
+    return v !== null && v !== '' ? parseFloat(v) : '';
+  }
+  if (valueType === 'boolean') return cellEl.getAttributeNS(OFFICE_NS, 'boolean-value') === 'true';
+  if (valueType === 'date') return cellEl.getAttributeNS(OFFICE_NS, 'date-value') || cellTextContent(cellEl);
+  if (valueType === 'time') return cellEl.getAttributeNS(OFFICE_NS, 'time-value') || cellTextContent(cellEl);
+  const sv = cellEl.getAttributeNS(OFFICE_NS, 'string-value');
+  if (sv !== null) return sv;
+  return cellTextContent(cellEl);
+}
+function cellTextContent(cellEl) {
+  const parts = [];
+  for (let child = cellEl.firstElementChild; child; child = child.nextElementSibling) {
+    if (child.namespaceURI === TEXT_NS && child.localName === 'p') parts.push(child.textContent);
+  }
+  return parts.join('\n');
+}
+function parseOdsRow(rowEl) {
+  const values = [];
+  for (let cellEl = rowEl.firstElementChild; cellEl && values.length < MAX_COLS; cellEl = cellEl.nextElementSibling) {
+    if (cellEl.namespaceURI !== TABLE_NS || cellEl.localName !== 'table-cell') continue;
+    const repeatAttr = cellEl.getAttributeNS(TABLE_NS, 'number-columns-repeated');
+    const repeat = repeatAttr ? Math.min(parseInt(repeatAttr, 10), MAX_COLS) : 1;
+    const v = cellValue(cellEl);
+    for (let r = 0; r < repeat && values.length < MAX_COLS; r++) values.push(v);
+  }
+  return values;
+}
+function parseOdsXml(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length > 0) {
+    throw new Error('not a well-formed XML document');
+  }
+  const tableEls = doc.getElementsByTagNameNS(TABLE_NS, 'table');
+  const sheets = {};
+  for (let t = 0; t < tableEls.length; t++) {
+    const tableEl = tableEls[t];
+    const name = tableEl.getAttributeNS(TABLE_NS, 'name');
+    let headers = null;
+    const rows = [];
+    for (let rowEl = tableEl.firstElementChild; rowEl; rowEl = rowEl.nextElementSibling) {
+      if (rowEl.namespaceURI !== TABLE_NS || rowEl.localName !== 'table-row') continue;
+      const values = parseOdsRow(rowEl);
+      if (values.every(v => v === '' || v === null || v === undefined)) continue;
+      const rowRepeatAttr = rowEl.getAttributeNS(TABLE_NS, 'number-rows-repeated');
+      const rowRepeat = rowRepeatAttr ? Math.min(parseInt(rowRepeatAttr, 10), 1000) : 1;
+      if (headers === null) {
+        let end = values.length;
+        while (end > 0 && (values[end - 1] === '' || values[end - 1] === null)) end--;
+        headers = values.slice(0, end);
+        continue;
+      }
+      const trimmed = values.slice(0, headers.length);
+      for (let rep = 0; rep < rowRepeat; rep++) rows.push(trimmed);
+    }
+    sheets[name] = { headers: headers || [], rows };
+  }
+  return sheets;
+}
+async function readOdsSheets(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const entries = readZipEntries(bytes);
+  if (!entries['content.xml']) throw new Error('no content.xml found inside the file');
+  const xmlBytes = extractZipEntry(bytes, entries['content.xml']);
+  const sheets = parseOdsXml(new TextDecoder('utf-8').decode(xmlBytes));
+  for (const name in sheets) withDerivedIntervalColumns(sheets[name]);
+  return sheets;
+}
+
+// ---- CSV text -> { fileName: { headers, rows } } ------------------------
+// RFC 4180: quoted fields may contain commas, doubled quotes, and newlines.
+function parseCsvRows(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); rows.push(row); row = []; field = '';
+    } else field += c;
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+// Spreadsheet cells came back typed; CSV cells are all text. Convert plain
+// numbers so the aggregators' `typeof === 'number'` checks keep working --
+// dates ("8/30/2023") and timestamps don't match and stay strings.
+const CSV_NUMBER_RE = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/;
+function csvCellValue(s) {
+  const t = s.trim();
+  return CSV_NUMBER_RE.test(t) ? parseFloat(t) : t;
+}
+// PVWatts' own CSV download starts with a few "Requested Location:"-style
+// metadata lines before the real header row, so the header is the first row
+// that classifySheet() recognizes, falling back to the first non-empty row.
+function parseCsvFile(fileName, text) {
+  const all = parseCsvRows(text)
+    .map(r => r.map(csvCellValue))
+    .filter(r => r.some(v => v !== ''));
+  if (!all.length) return { [fileName]: { headers: [], rows: [] } };
+  let headerIdx = all.findIndex(r => classifySheet(fileName, r) !== null);
+  if (headerIdx < 0) headerIdx = 0;
+  const headers = all[headerIdx].map(v => String(v));
+  let end = headers.length;
+  while (end > 0 && headers[end - 1] === '') end--;
+  headers.length = end;
+  const rows = all.slice(headerIdx + 1).map(r => r.slice(0, headers.length));
+  return { [fileName]: withDerivedIntervalColumns({ headers, rows }) };
+}
+// The raw utility CSV has no Hour / Month Name helper columns (the .ods
+// exports had them added by hand), so derive them: Hour from the wall-clock
+// hour written in Start Time ("2023-08-30 19:00:00-04:00" -> 19, matching
+// what the .ods Hour column held), Month Name from Date. Existing columns
+// are left alone.
+function withDerivedIntervalColumns(sheet) {
+  const { headers, rows } = sheet;
+  const dateIdx = findCol(headers, 'Date');
+  const startIdx = findCol(headers, 'Start Time');
+  if (findCol(headers, 'Net') < 0 || dateIdx < 0) return sheet;
+  if (findCol(headers, 'Hour') < 0 && startIdx >= 0) {
+    headers.push('Hour');
+    for (const row of rows) {
+      const m = typeof row[startIdx] === 'string' ? row[startIdx].match(/[ T](\d{1,2}):\d{2}/) : null;
+      row[headers.length - 1] = m ? +m[1] : '';
+    }
+  }
+  if (findCol(headers, 'Month Name') < 0) {
+    headers.push('Month Name');
+    for (const row of rows) {
+      const mi = monthIndexFromDateValue(row[dateIdx]);
+      row[headers.length - 1] = mi === null ? '' : DATA.months[mi];
+    }
+  }
+  return sheet;
+}
+function monthIndexFromDateValue(v) {
+  if (typeof v !== 'string' || !v) return null;
+  const iso = v.match(/^\d{4}-(\d{2})-\d{2}/);
+  const us = v.match(/^(\d{1,2})\/\d{1,2}\/\d{4}$/);
+  const mo = iso ? +iso[1] : us ? +us[1] : NaN;
+  return mo >= 1 && mo <= 12 ? mo - 1 : null;
+}
+
+// ---- classify a parsed sheet & recompute aggregates --------------------
+function findCol(headers, name) {
+  const target = name.trim().toLowerCase();
+  return headers.findIndex(h => (h || '').toString().trim().toLowerCase() === target);
+}
+function monthIndexFromName(name) {
+  if (typeof name !== 'string') return -1;
+  const n = name.trim().toLowerCase();
+  return DATA.months.findIndex(m => m.toLowerCase() === n);
+}
+// Hour / Month Name may be absent in a raw utility CSV (derived later from
+// Start Time / Date). Gas vs. electric comes from the utility's own Type
+// column when present ("electric"/"gas"), else from the sheet/file name.
+function classifySheet(sheetName, headers, rows) {
+  const norm = headers.map(h => (h || '').toString().trim().toLowerCase());
+  const has = name => norm.includes(name);
+  const isPvWatts = norm.some(h => h.includes('ac system output (kwh)') || h.includes('ac system output (w)'));
+  if (isPvWatts) return 'pv';
+  const isRawInterval = has('date') && has('net') && (has('hour') || has('start time'));
+  if (isRawInterval) {
+    const typeIdx = norm.indexOf('type');
+    const firstType = typeIdx >= 0 && rows && rows.length ? String(rows[0][typeIdx]).trim().toLowerCase() : '';
+    if (firstType === 'gas') return 'gas';
+    if (firstType === 'electric') return 'electric';
+    const lname = sheetName.toLowerCase();
+    if (lname.includes('gas')) return 'gas';
+    if (lname.includes('electric') || lname.includes('smart meter') || lname.includes('load')) return 'electric';
+    return 'unknown-interval';
+  }
+  return null;
+}
+// A raw interval export can span multiple years unevenly (e.g. two Junes but
+// only one January), so a plain sum-per-month isn't comparable month-to-month
+// or against a PVWatts sheet, which always represents a single simulated
+// year. Pull the calendar year out of the Date column so each month's total
+// can be divided down to a single-year average before it's used anywhere.
+function yearFromDateValue(v) {
+  if (typeof v !== 'string' || !v) return null;
+  const iso = v.match(/^(\d{4})-\d{2}-\d{2}/);
+  if (iso) return iso[1];
+  const us = v.match(/^\d{1,2}\/\d{1,2}\/(\d{4})$/);
+  if (us) return us[1];
+  return null;
+}
+// Returns 0 (Sun) - 6 (Sat), or null if unparseable. Parses the y/m/d digits
+// out by hand and builds the date via Date.UTC rather than `new Date(v)`
+// directly -- an ISO string ("2023-06-15") is parsed as UTC midnight per
+// spec, so reading it back with local getDay() can land on the wrong day in
+// negative-UTC-offset zones; using getUTCDay() on a Date.UTC() we built
+// ourselves sidesteps that regardless of which of the two date formats (ISO
+// or US m/d/y) the sheet used.
+function dayOfWeekFromDateValue(v) {
+  if (typeof v !== 'string' || !v) return null;
+  let y, mo, d;
+  const iso = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) { y = +iso[1]; mo = +iso[2]; d = +iso[3]; }
+  else {
+    const us = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (us) { mo = +us[1]; d = +us[2]; y = +us[3]; }
+  }
+  if (y === undefined) return null;
+  return new Date(Date.UTC(y, mo - 1, d)).getUTCDay();
+}
+const COLD_THRESHOLD_F = 32;
+
+// Ithaca, NY is an inland Great Lakes / humid-continental climate: long,
+// genuinely cold winters (many hours below freezing) and mild summers with
+// little AC-driven load, so "below freezing" is both a physically meaningful
+// and a plainly-understood cutoff for a household reading their own data.
+// Reports what SHARE of total usage happens below that cutoff, compared to
+// what share of the year's hours are that cold -- e.g. "36% of usage in only
+// 19% of hours" reads as a plain disproportion without needing a second
+// "mild baseline" band, and (unlike a ratio-of-averages) it can't blow up
+// when a baseline average is near zero, which real gas data hits often.
+function computeColdWeatherShare(pairs, coldThresholdF) {
+  if (!pairs.length) return null;
+  let coldSum = 0, coldCount = 0, totalSum = 0;
+  for (const { temp, net } of pairs) {
+    totalSum += net;
+    if (temp < coldThresholdF) { coldSum += net; coldCount++; }
+  }
+  return {
+    usageShare: totalSum !== 0 ? coldSum / totalSum : null,
+    hourShare: coldCount / pairs.length,
+    coldHours: coldCount,
+  };
+}
+const TEMP_TREND_MIN_SAMPLES = 5;
+const TEMP_TREND_SMOOTH_WINDOW = 3;
+
+// One point per whole degree F: the mean Net usage of every row at that
+// temperature, then lightly smoothed across neighboring degrees (a small
+// centered moving average) so the line reads as one continuous path rather
+// than a jagged stairstep. A straight best-fit line would hide real shape
+// here (e.g. a heating system's switchover point where usage bends sharply),
+// which is the whole reason to plot this instead of just reporting a slope.
+// Degrees with too few samples (mostly the extreme cold tail) are dropped
+// before smoothing so one noisy reading can't swing its neighbors.
+function computeTempTrend(pairs, minSamples, smoothWindow) {
+  if (!pairs.length) return null;
+  const sums = new Map(), counts = new Map();
+  for (const { temp, net } of pairs) {
+    sums.set(temp, (sums.get(temp) || 0) + net);
+    counts.set(temp, (counts.get(temp) || 0) + 1);
+  }
+  const raw = [...sums.keys()]
+    .sort((a, b) => a - b)
+    .filter((t) => counts.get(t) >= minSamples)
+    .map((t) => ({ temp: t, value: sums.get(t) / counts.get(t) }));
+  if (raw.length < 2) return null;
+  const half = Math.floor(smoothWindow / 2);
+  const points = raw.map((p, i) => {
+    let sum = 0, n = 0;
+    for (let j = Math.max(0, i - half); j <= Math.min(raw.length - 1, i + half); j++) { sum += raw[j].value; n++; }
+    return { temp: p.temp, value: sum / n };
+  });
+  return { points };
+}
+
+function aggregateRawInterval(sheet) {
+  const netIdx = findCol(sheet.headers, 'Net');
+  const hourIdx = findCol(sheet.headers, 'Hour');
+  const monthNameIdx = findCol(sheet.headers, 'Month Name');
+  const dateIdx = findCol(sheet.headers, 'Date');
+  const weatherIdx = findCol(sheet.headers, 'Weather');
+  const hourSum = DATA.months.map(() => new Array(24).fill(0));
+  const hourCount = DATA.months.map(() => new Array(24).fill(0));
+  const hourSumWeekday = DATA.months.map(() => new Array(24).fill(0));
+  const hourCountWeekday = DATA.months.map(() => new Array(24).fill(0));
+  const monthTotal = new Array(12).fill(0);
+  const monthYears = DATA.months.map(() => new Set());
+  const tempPairs = [];
+  let matched = 0;
+  for (const row of sheet.rows) {
+    const mi = monthIndexFromName(row[monthNameIdx]);
+    const hr = Math.round(row[hourIdx]);
+    const net = row[netIdx];
+    if (mi < 0 || !(hr >= 0 && hr < 24) || typeof net !== 'number' || Number.isNaN(net)) continue;
+    hourSum[mi][hr] += net; hourCount[mi][hr]++; monthTotal[mi] += net; matched++;
+    const year = dateIdx >= 0 ? yearFromDateValue(row[dateIdx]) : null;
+    if (year) monthYears[mi].add(year);
+    const dow = dateIdx >= 0 ? dayOfWeekFromDateValue(row[dateIdx]) : null;
+    if (dow !== null && dow >= 1 && dow <= 5) {
+      hourSumWeekday[mi][hr] += net; hourCountWeekday[mi][hr]++;
+    }
+    if (weatherIdx >= 0) {
+      const temp = row[weatherIdx];
+      if (typeof temp === 'number' && !Number.isNaN(temp)) tempPairs.push({ temp, net });
+    }
+  }
+  const hourMatrix = DATA.months.map((_, mi) => hourSum[mi].map((s, h) => hourCount[mi][h] ? s / hourCount[mi][h] : 0));
+  const hourMatrixWeekday = DATA.months.map((_, mi) => hourSumWeekday[mi].map((s, h) => hourCountWeekday[mi][h] ? s / hourCountWeekday[mi][h] : 0));
+  const monthTotalPerYear = monthTotal.map((total, mi) => total / (monthYears[mi].size || 1));
+  const coldShare = weatherIdx >= 0 ? computeColdWeatherShare(tempPairs, COLD_THRESHOLD_F) : null;
+  const tempTrend = weatherIdx >= 0 ? computeTempTrend(tempPairs, TEMP_TREND_MIN_SAMPLES, TEMP_TREND_SMOOTH_WINDOW) : null;
+  return { hourMatrix, hourMatrixWeekday, monthTotal: monthTotalPerYear, coldShare, tempTrend, matched };
+}
+function aggregatePvWatts(sheet) {
+  const monthIdx = findCol(sheet.headers, 'Month');
+  const hourIdx = findCol(sheet.headers, 'Hour');
+  // PVWatts' own CSV download reports AC output in W (hourly, so W == Wh);
+  // the .ods exports had a kWh column added. Prefer kWh, else convert W.
+  let outIdx = findCol(sheet.headers, 'AC System Output (kWh)');
+  let outScale = 1;
+  if (outIdx < 0) { outIdx = findCol(sheet.headers, 'AC System Output (W)'); outScale = 1 / 1000; }
+  const hourSum = DATA.months.map(() => new Array(24).fill(0));
+  const hourCount = DATA.months.map(() => new Array(24).fill(0));
+  const monthTotal = new Array(12).fill(0);
+  let matched = 0;
+  for (const row of sheet.rows) {
+    const mi = Math.round(row[monthIdx]) - 1;
+    const hr = Math.round(row[hourIdx]);
+    const out = typeof row[outIdx] === 'number' ? row[outIdx] * outScale : row[outIdx];
+    if (!(mi >= 0 && mi < 12) || !(hr >= 0 && hr < 24) || typeof out !== 'number' || Number.isNaN(out)) continue;
+    hourSum[mi][hr] += out; hourCount[mi][hr]++; monthTotal[mi] += out; matched++;
+  }
+  const hourMatrix = DATA.months.map((_, mi) => hourSum[mi].map((s, h) => hourCount[mi][h] ? s / hourCount[mi][h] : 0));
+  return { hourMatrix, monthTotal, matched };
+}
+
+// ---- upload button / file input UI -------------------------------------
+const uploadBtn = document.getElementById('upload-btn');
+const fileInput = document.getElementById('file-input');
+const uploadStatusEl = document.getElementById('upload-status');
+const uploadLogEl = document.getElementById('upload-log');
+const uploadSpinnerEl = document.getElementById('upload-spinner');
+function setStatus(msg) { uploadStatusEl.textContent = msg; }
+function showSpinner() { uploadSpinnerEl.style.display = 'inline-block'; }
+function hideSpinner() { uploadSpinnerEl.style.display = 'none'; }
+function logMsg(msg, ok) {
+  const row = document.createElement('div');
+  if (ok) row.className = 'ok';
+  row.textContent = msg;
+  uploadLogEl.appendChild(row);
+}
+function clearLog() { uploadLogEl.innerHTML = ''; }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function processFile(file) {
+  logMsg(`Reading "${file.name}"...`);
+  await sleep(0);
+  let sheets;
+  try {
+    sheets = /\.ods$/i.test(file.name)
+      ? await readOdsSheets(file)
+      : parseCsvFile(file.name, await file.text());
+  } catch (err) {
+    logMsg(`  had trouble reading "${file.name}". Try re-exporting it and uploading it again.`);
+    return;
+  }
+
+  let recognizedAny = false;
+  for (const sheetName in sheets) {
+    const sheet = sheets[sheetName];
+    if (!sheet.headers.length || !sheet.rows.length) continue;
+    const kind = classifySheet(sheetName, sheet.headers, sheet.rows);
+    if (kind === null) continue;
+    if (kind === 'pv') {
+      const agg = aggregatePvWatts(sheet);
+      DATA.heatmaps.pv = agg.hourMatrix;
+      DATA.monthlyTotals.pv_kwh = agg.monthTotal.map(v => Math.round(v * 10) / 10);
+      logMsg(`  Found solar (PV) data in "${sheetName}" ✓`, true);
+      recognizedAny = true;
+      continue;
+    }
+    let finalKind = kind;
+    if (kind === 'unknown-interval') {
+      const isElectric = window.confirm(
+        `${sheetName === file.name ? '' : `The sheet "${sheetName}" in `}"${file.name}" looks like usage data, but we ` +
+        `can't tell if it's electric or gas.\n\n` +
+        `Click OK if it's ELECTRIC usage, or Cancel if it's GAS usage.`
+      );
+      finalKind = isElectric ? 'electric' : 'gas';
+    }
+    const agg = aggregateRawInterval(sheet);
+    if (finalKind === 'electric') {
+      DATA.heatmaps.load = agg.hourMatrix;
+      DATA.heatmaps.loadWeekday = agg.hourMatrixWeekday;
+      DATA.monthlyTotals.load_kwh = agg.monthTotal.map(v => Math.round(v * 10) / 10);
+      DATA.tempCallout.elec = agg.coldShare;
+      DATA.tempTrend.elec = agg.tempTrend;
+      logMsg(`  Found electric usage data in "${sheetName}" ✓`, true);
+    } else {
+      DATA.heatmaps.gas = agg.hourMatrix;
+      DATA.heatmaps.gasWeekday = agg.hourMatrixWeekday;
+      DATA.monthlyTotals.gas_units = agg.monthTotal.map(v => Math.round(v * 10) / 10);
+      DATA.tempCallout.gas = agg.coldShare;
+      DATA.tempTrend.gas = agg.tempTrend;
+      logMsg(`  Found gas usage data in "${sheetName}" ✓`, true);
+    }
+    recognizedAny = true;
+  }
+  if (!recognizedAny) logMsg(`  Didn't find any usable data in "${file.name}"`);
+}
+
+async function handleFiles(fileList) {
+  const files = Array.from(fileList).filter(f => /\.(csv|ods)$/i.test(f.name));
+  if (files.length === 0) { setStatus("That doesn't look like a .csv or .ods file. Try again."); return; }
+  clearLog();
+  showSpinner();
+  setStatus('Reading your file(s)...');
+  await sleep(0);
+  for (const file of files) await processFile(file);
+  resetEvSettings();
+  renderAll();
+  hideSpinner();
+  setStatus('');
+}
+
+uploadBtn.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) handleFiles(fileInput.files);
+  fileInput.value = '';
+});
+document.getElementById('reset-btn').addEventListener('click', () => {
+  DATA.heatmaps = JSON.parse(JSON.stringify(EMPTY_DATA.heatmaps));
+  DATA.monthlyTotals = JSON.parse(JSON.stringify(EMPTY_DATA.monthlyTotals));
+  DATA.tempCallout = JSON.parse(JSON.stringify(EMPTY_DATA.tempCallout));
+  DATA.tempTrend = JSON.parse(JSON.stringify(EMPTY_DATA.tempTrend));
+  clearLog();
+  setStatus('Cleared. Upload a .csv or .ods file above to get started.');
+  renderAll();
+});
+
+// ---- export a read-only, self-contained copy for emailing to a household -
+function slugify(name) {
+  const s = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return s || 'household';
+}
+
+document.getElementById('export-btn').addEventListener('click', () => {
+  const exportBtn = document.getElementById('export-btn');
+  if (exportBtn.disabled) return;
+
+  const name = prompt('Household name (used for the exported file name):', '');
+  if (name === null) return; // cancelled
+
+  const hasLoad = !!DATA.monthlyTotals.load_kwh;
+  const hasPv = !!DATA.monthlyTotals.pv_kwh;
+  const hasGas = !!DATA.monthlyTotals.gas_units;
+  const hasColdElec = hasLoad && !!DATA.tempCallout.elec && DATA.tempCallout.elec.coldHours > 0 && DATA.tempCallout.elec.usageShare !== null;
+  const hasColdGas = hasGas && !!DATA.tempCallout.gas && DATA.tempCallout.gas.coldHours > 0 && DATA.tempCallout.gas.usageShare !== null;
+  const hasTrendElec = hasLoad && !!DATA.tempTrend.elec && DATA.tempTrend.elec.points.length >= 2;
+  const hasTrendGas = hasGas && !!DATA.tempTrend.gas && DATA.tempTrend.gas.points.length >= 2;
+
+  const doc = new DOMParser().parseFromString(PRISTINE_HTML, 'text/html');
+
+  const charsetMeta = doc.createElement('meta');
+  charsetMeta.setAttribute('charset', 'utf-8');
+  doc.head.prepend(charsetMeta);
+
+  doc.getElementById('upload-card').style.display = 'none';
+  if (!(hasLoad || hasPv)) doc.getElementById('card-monthly-elec').style.display = 'none';
+  if (!hasGas) doc.getElementById('card-monthly-gas').style.display = 'none';
+  if (!(hasLoad && hasPv)) doc.getElementById('card-load-pv').style.display = 'none';
+  // The callout card has two independent rows -- hide whichever rows lack a
+  // real stat (a "drop a file" placeholder isn't useful in a finished
+  // report), and hide the whole card only if neither row has anything.
+  if (!hasColdElec) doc.getElementById('callout-elec').style.display = 'none';
+  if (!hasColdGas) doc.getElementById('callout-gas').style.display = 'none';
+  if (!hasColdElec && !hasColdGas) doc.getElementById('card-temp-callout').style.display = 'none';
+  if (!hasTrendElec) doc.getElementById('chart-temp-trend-elec').closest('.temp-trend-row').style.display = 'none';
+  if (!hasTrendGas) doc.getElementById('chart-temp-trend-gas').closest('.temp-trend-row').style.display = 'none';
+  if (!hasTrendElec && !hasTrendGas) doc.getElementById('card-temp-trend').style.display = 'none';
+  // The Electric vehicle tab goes into an export only when asked for (not
+  // every household has, or is considering, an EV) and only if its chart
+  // can draw. Without it there's just one tab, so the tab bar goes too.
+  // The include checkbox itself is an authoring control, never exported.
+  // (Hidden, not removed: the re-embedded script looks these elements up by
+  // id at load, and the EV panel already starts out `hidden`.)
+  const includeEv = evExportToggle.checked && hasLoad && hasPv;
+  doc.getElementById('ev-export-control').style.display = 'none';
+  if (!includeEv) doc.getElementById('tab-bar').style.display = 'none';
+
+  // The original <script> above is embedded verbatim (unmodified) inside
+  // PRISTINE_HTML, so it runs fresh with empty DATA when the exported file
+  // is opened. This second script runs after it in document order and
+  // injects the real data, then re-draws everything -- renderAll() is
+  // idempotent, so the brief empty-placeholder pass is invisible.
+  const dataScript = doc.createElement('script');
+  dataScript.textContent =
+    `DATA.monthlyTotals = ${JSON.stringify(DATA.monthlyTotals)};\n` +
+    `DATA.heatmaps = ${JSON.stringify(DATA.heatmaps)};\n` +
+    `DATA.tempCallout = ${JSON.stringify(DATA.tempCallout)};\n` +
+    `DATA.tempTrend = ${JSON.stringify(DATA.tempTrend)};\n` +
+    (includeEv ? `applyEvSettings(${JSON.stringify(getEvSettings())});\n` : '') +
+    `renderAll();`;
+  doc.body.appendChild(dataScript);
+
+  const html = doc.documentElement.outerHTML;
+  const d = new Date();
+  const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const filename = `${slugify(name)}-energy-profile-${dateStr}.html`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+</script>
