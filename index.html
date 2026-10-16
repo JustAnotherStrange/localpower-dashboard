@@ -87,6 +87,12 @@
      existing gridline. Bolder than --grid but still lighter/thinner than
      the actual EV band/line (stroke-width 3, full opacity) so it stays
      visually secondary to it. */
+  /* Draggable schedule timeline under the EV chart (see drawEvTimeline). */
+  .ev-timeline-wrap { margin-top: 2px; }
+  .ev-timeline-wrap svg { display: block; touch-action: pan-y; }
+  .ev-tl-handle { cursor: ew-resize; touch-action: none; }
+  .ev-tl-label { fill: var(--text-muted); font-size: 11px; pointer-events: none; }
+  .ev-timeline-hint { margin: 2px 0 12px; font-size: 0.85rem; color: var(--text-muted); }
   .ev-marker-line { stroke: var(--series-ev); stroke-width: 1.5; opacity: 0.55; }
   .grid-line { stroke: var(--grid); stroke-width: 1; }
   .baseline { stroke: var(--baseline); stroke-width: 1; }
@@ -111,6 +117,22 @@
     border: 1px solid var(--border); border-radius: var(--radius-card);
     background: var(--surface-2); padding: 14px 16px 16px;
   }
+  #ev-wfh-label { display: flex; margin-bottom: 18px; }
+  .ev-edit-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 14px 0 8px; font-size: 1rem; color: var(--text-primary); }
+  .ev-edit-bar select {
+    font: inherit; font-weight: 700; color: var(--series-ev); background: var(--surface-1);
+    border: 1px solid var(--baseline); border-radius: var(--radius-btn); padding: 5px 8px; cursor: pointer;
+  }
+  .ev-apply-all { font-size: 0.85rem; padding: 5px 10px; margin-left: 6px; }
+  .ev-day-chips-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 10px; font-size: 0.85rem; color: var(--text-secondary); }
+  .ev-day-chips { display: inline-flex; gap: 4px; }
+  .ev-day-chip {
+    font: inherit; font-size: 0.85rem; min-width: 44px; padding: 5px 0; cursor: pointer; text-align: center;
+    color: var(--text-secondary); background: var(--surface-1); border: 1px solid var(--baseline); border-radius: var(--radius-btn);
+  }
+  .ev-day-chip[aria-pressed="true"] { color: #fff; background: var(--series-ev); border-color: var(--series-ev); font-weight: 700; }
+  .ev-verdict-scope { display: block; margin-top: 8px; font-size: 0.85rem; color: var(--text-muted); }
+  .ev-wfh-off { opacity: 0.45; pointer-events: none; }
   .ev-field-group-label {
     display: block; font-size: 0.95rem; font-weight: 700; color: var(--text-primary); margin: 0 0 12px;
   }
@@ -412,6 +434,7 @@
   <div class="tab-options"><label class="weekday-toggle" id="ev-export-control"><input type="checkbox" id="ev-export-toggle" autocomplete="off"> Include this tab in exports</label></div>
   <div class="card" id="card-ev">
     <h2>Electric vehicle charging on an average weekday</h2>
+    <p class="sub" id="ev-wfh-note" style="display:none">With the car staying home there is no commute, so no charging is needed in this mode.</p>
     <p class="sub" id="ev-bidir-note" style="display:none">You need a compatible car and home charger for bidirectional charging to work. This is a hypothetical evaluation.</p>
     <div class="ev-verdict" id="ev-verdict" style="display:none"></div>
     <div class="chart-controls">
@@ -424,7 +447,7 @@
     </div>
     <div class="month-tabs" id="month-tabs-ev"></div>
     <div class="legend">
-      <span class="legend-item"><span class="legend-key" style="background:var(--series-load)"></span>Avg weekday load (kWh)</span>
+      <span class="legend-item"><span class="legend-key" style="background:var(--series-load)"></span><span id="ev-legend-load">Avg workday load (kWh)</span></span>
       <span class="legend-item"><span class="legend-key" style="background:var(--series-pv)"></span>Avg PV production (kWh)</span>
       <span class="legend-item"><span class="legend-key rect" style="background:var(--offset-fill)"></span>Potential offset (PV covers load)</span>
       <span class="legend-item"><span class="legend-key rect" style="background:var(--surplus-fill)"></span>Surplus PV generation</span>
@@ -433,10 +456,24 @@
       <span class="legend-item" id="legend-ev-supply" style="display:none"><span class="legend-key rect" style="background:var(--ev-supply-fill)"></span>EV powering home</span>
     </div>
     <div class="chart-wrap"><svg id="chart-ev" width="100%" height="300"></svg></div>
+    <div class="ev-edit-bar">
+      <span>Editing</span>
+      <select id="ev-edit-type" autocomplete="off" aria-label="Day type being edited"><option value="work">workdays</option><option value="non">non-workdays</option></select>
+      <span>in</span>
+      <select id="ev-edit-month" autocomplete="off" aria-label="Month being edited"></select>
+      <button type="button" class="btn ev-apply-all" id="ev-apply-all">Apply to all months</button>
+    </div>
+    <div class="ev-day-chips-row">
+      <span class="ev-day-chips-label">Workdays (click a day to change):</span>
+      <span class="ev-day-chips" id="ev-day-chips"></span>
+    </div>
+    <div class="chart-wrap ev-timeline-wrap" id="ev-timeline-wrap" style="display:none"><svg id="ev-timeline" width="100%"></svg></div>
+    <p class="ev-timeline-hint" id="ev-timeline-hint" style="display:none">Drag the handles to set when the car leaves and returns, and when charging starts. You can also type exact times below.</p>
     <div class="ev-charge-fields" id="ev-charge-fields">
       <div class="ev-field-groups">
         <div class="ev-field-group">
           <span class="ev-field-group-label">Commute</span>
+          <label class="weekday-toggle" id="ev-wfh-label"><input type="checkbox" id="ev-wfh" autocomplete="off"> Car never leaves</label>
           <div class="ev-field-grid">
             <label>Round-trip commute (mi)<input type="number" id="ev-distance" min="0" step="1" value="40" autocomplete="off"></label>
             <label>Efficiency (mi/kWh)<input type="number" id="ev-efficiency" min="0.1" step="0.1" value="4" autocomplete="off"></label>
@@ -458,7 +495,7 @@
       </div>
     </div>
     <div class="chart-wrap" id="ev-share-wrap" style="display:none; margin-top:18px">
-      <p class="sub" style="margin:8px 0 2px">Share of the electricity the home would otherwise draw from the grid (after solar) that the car could cover, by month</p>
+      <p class="sub" style="margin:8px 0 2px">Share of the electricity the home would otherwise draw from the grid (after solar) that the car could cover, by month <span id="ev-share-scope"></span></p>
       <svg id="chart-ev-share" width="100%" height="150"></svg>
     </div>
   </div>
@@ -491,7 +528,7 @@ const THERM_TO_KWH = 29.3001;
 const DATA = {
   months: MONTH_NAMES,
   monthlyTotals: { load_kwh: null, gas_units: null, pv_kwh: null },
-  heatmaps: { load: null, pv: null, gas: null, loadWeekday: null, gasWeekday: null },
+  heatmaps: { load: null, pv: null, gas: null, loadWeekday: null, gasWeekday: null, loadDow: null },
   tempCallout: { elec: null, gas: null },
   tempTrend: { elec: null, gas: null },
 };
@@ -833,6 +870,7 @@ function setSelectedMonth(i) {
   if (m === selectedMonth) return;
   const prev = selectedMonth;
   selectedMonth = m;
+  onEvMonthChange();
   monthSliders.forEach(s => s.sync(prev, m));
   if (DATA.monthlyTotals.load_kwh && DATA.monthlyTotals.pv_kwh) {
     drawLoadVsPv(selectedMonth);
@@ -1189,6 +1227,12 @@ const EV_INPUT_IDS = [
   'ev-battery', 'ev-reserve', 'ev-overnight-start', 'ev-round-trip',
 ];
 const evInputs = Object.fromEntries(EV_INPUT_IDS.map(id => [id, document.getElementById(id)]));
+// "Work from home": the car never leaves, so no commute. Checkbox, not in
+// EV_INPUT_IDS (those are value inputs); handled alongside them below.
+const evWfh = document.getElementById('ev-wfh');
+evWfh.checked = false;
+// The commute fields are meaningless while the car stays home.
+const EV_COMMUTE_IDS = ['ev-distance', 'ev-efficiency', 'ev-departure', 'ev-return'];
 // Same browser-restored-checkbox-state fix as gasCompoundToggle above.
 evModeToggle.checked = evBidirOn;
 evExportToggle.checked = false;
@@ -1197,9 +1241,101 @@ function updateEvModeUi() {
   document.querySelectorAll('.ev-bidir-field').forEach(n => { n.style.display = evBidirOn ? '' : 'none'; });
   document.querySelectorAll('.ev-charge-only-field').forEach(n => { n.style.display = evBidirOn ? 'none' : ''; });
   document.getElementById('ev-bidir-note').style.display = evBidirOn ? '' : 'none';
+  document.getElementById('ev-wfh-note').style.display = (evWfh.checked && !evBidirOn) ? '' : 'none';
+  EV_COMMUTE_IDS.forEach(id => {
+    evInputs[id].disabled = evWfh.checked;
+    evInputs[id].closest('label').classList.toggle('ev-wfh-off', evWfh.checked);
+  });
   document.getElementById('legend-ev-supply').style.display = evBidirOn ? '' : 'none';
 }
 updateEvModeUi();
+
+// ---- Day types and per-month schedules --------------------------------
+// The schedule fields (leaves / returns / charging start / grid charging
+// start / "Car never leaves") are kept per day type ("work" or "non") and
+// per month. The inputs always show the one being edited (day type chosen
+// in #ev-edit-type, month = the page's selectedMonth); every input writes
+// back into evSchedules, so other months are read straight from there. A
+// month that was never edited (null) uses the default schedule. Non-workday
+// default is "Car never leaves". Each weekday can be flipped between the
+// two kinds with the chips; a type's load profile is the average of the
+// days of the week currently assigned to it (DATA.heatmaps.loadDow).
+const EV_SCHED_IDS = ['ev-departure', 'ev-return', 'ev-start', 'ev-overnight-start'];
+const EV_DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+let evEditType = 'work';
+let evDayKinds = [false, true, true, true, true, true, false]; // index 0 = Sunday; true = workday
+let evSchedules = { work: new Array(12).fill(null), non: new Array(12).fill(null) };
+function evMonthIdx() { return DATA.months.indexOf(selectedMonth); }
+function evDefaultSchedule(type) {
+  const values = {};
+  EV_SCHED_IDS.forEach(id => { values[id] = evInputs[id].defaultValue; });
+  return { values, wfh: type === 'non' };
+}
+function evScheduleFor(type, mi) { return evSchedules[type][mi] || evDefaultSchedule(type); }
+function evTypeName(type) { return type === 'work' ? 'workdays' : 'non-workdays'; }
+// Average load for the days of the week assigned to this day type.
+function evLoadFor(type, mi) {
+  const dow = DATA.heatmaps.loadDow;
+  const days = dow ? [0, 1, 2, 3, 4, 5, 6].filter(d => evDayKinds[d] === (type === 'work') && dow[mi][d]) : [];
+  if (!days.length) return (type === 'work' && DATA.heatmaps.loadWeekday || DATA.heatmaps.load)[mi];
+  return DATA.heatmaps.load[mi].map((_, h) => days.reduce((a, d) => a + dow[mi][d][h], 0) / days.length);
+}
+function loadEvScheduleIntoInputs() {
+  const sc = evScheduleFor(evEditType, evMonthIdx());
+  EV_SCHED_IDS.forEach(id => { evInputs[id].value = sc.values[id]; });
+  evWfh.checked = sc.wfh;
+  updateEvModeUi();
+  syncEvEditBar();
+}
+function saveEvScheduleFromInputs() {
+  const values = {};
+  EV_SCHED_IDS.forEach(id => { values[id] = evInputs[id].value; });
+  evSchedules[evEditType][evMonthIdx()] = { values, wfh: evWfh.checked };
+  syncEvEditBar();
+}
+const evEditTypeSel = document.getElementById('ev-edit-type');
+const evEditMonthSel = document.getElementById('ev-edit-month');
+DATA.months.forEach((name, i) => {
+  const o = document.createElement('option');
+  o.value = String(i);
+  evEditMonthSel.appendChild(o);
+});
+// Month options get a dot when that month has a non-default schedule for
+// the day type being edited.
+function syncEvEditBar() {
+  evEditTypeSel.value = evEditType;
+  const def = JSON.stringify(evDefaultSchedule(evEditType));
+  DATA.months.forEach((name, i) => {
+    const custom = evSchedules[evEditType][i] && JSON.stringify(evSchedules[evEditType][i]) !== def;
+    evEditMonthSel.options[i].textContent = name + (custom ? ' •' : '');
+  });
+  evEditMonthSel.value = String(evMonthIdx());
+  document.getElementById('ev-legend-load').textContent = `Avg ${evEditType === 'work' ? 'workday' : 'non-workday'} load (kWh)`;
+  document.getElementById('ev-share-scope').textContent = `(${evTypeName(evEditType)})`;
+  document.querySelectorAll('.ev-day-chip').forEach(b => b.setAttribute('aria-pressed', String(evDayKinds[Number(b.dataset.dow)])));
+}
+const evChipsEl = document.getElementById('ev-day-chips');
+// Monday first, as people read a week.
+[1, 2, 3, 4, 5, 6, 0].forEach(d => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'ev-day-chip';
+  b.textContent = EV_DAY_NAMES[d];
+  b.dataset.dow = d;
+  b.addEventListener('click', () => { evDayKinds[d] = !evDayKinds[d]; syncEvEditBar(); redrawEvChartAnimated(); });
+  evChipsEl.appendChild(b);
+});
+evEditTypeSel.addEventListener('change', () => { evEditType = evEditTypeSel.value; loadEvScheduleIntoInputs(); redrawEvChartAnimated(); });
+evEditMonthSel.addEventListener('change', () => setSelectedMonth(Number(evEditMonthSel.value)));
+document.getElementById('ev-apply-all').addEventListener('click', () => {
+  saveEvScheduleFromInputs();
+  const copy = evSchedules[evEditType][evMonthIdx()];
+  for (let i = 0; i < 12; i++) evSchedules[evEditType][i] = JSON.parse(JSON.stringify(copy));
+  syncEvEditBar();
+  redrawEvChartAnimated();
+});
+// Called by setSelectedMonth: the inputs follow the month.
+function onEvMonthChange() { loadEvScheduleIntoInputs(); }
 
 // EV settings go back to their defaults (the value="" written in the
 // markup) on page load and on every upload, so a new household never
@@ -1208,6 +1344,10 @@ updateEvModeUi();
 // fields also carry autocomplete="off" for the same reason.
 function resetEvSettings() {
   EV_INPUT_IDS.forEach(id => { evInputs[id].value = evInputs[id].defaultValue; });
+  evEditType = 'work';
+  evDayKinds = [false, true, true, true, true, true, false];
+  evSchedules = { work: new Array(12).fill(null), non: new Array(12).fill(null) };
+  loadEvScheduleIntoInputs();
 }
 resetEvSettings();
 
@@ -1222,7 +1362,10 @@ evModeToggle.addEventListener('change', () => {
 // (letting someone see how shifting a time changes the picture) -- 'input'
 // rather than 'change' so it updates as you type/spin, not just on blur.
 // Settings can change the fixed axis scale too, so these slide as well.
+// Schedule edits are saved first so the redraw below reads them.
+EV_SCHED_IDS.forEach(id => evInputs[id].addEventListener('input', saveEvScheduleFromInputs));
 EV_INPUT_IDS.forEach(id => evInputs[id].addEventListener('input', redrawEvChartAnimated));
+evWfh.addEventListener('change', () => { saveEvScheduleFromInputs(); updateEvModeUi(); redrawEvChartAnimated(); });
 
 // Up/down arrows next to every EV field, so values (especially times) can
 // be clicked through instead of retyped. Built here rather than in the
@@ -1293,25 +1436,138 @@ function redrawEvChartAnimated() {
   animateEvAxis(lastEvRenderMax, evAxisScale().max);
 }
 
+
+// ---- Draggable schedule timeline -------------------------------------
+// A strip under the EV chart, on the same x-scale as the chart above, with
+// the away stretch shaded and grab handles for "Leaves" / "Home" and a
+// marker for the charging start. Dragging writes the hour into the same
+// <input type="time"> fields (and fires 'input'), so the typed fields stay
+// the single source of truth and everything downstream is unchanged;
+// typing in them moves the handles (drawEvChart calls updateEvTimeline).
+// The away block wraps past midnight (drawn as two pieces).
+// Set to false to drop the draggable charging marker and leave charging
+// start as a typed field only.
+const EV_TIMELINE_CHARGE_MARKER = true;
+const EVTL = { W: 900, H: 78, marginL: 46, marginR: 16, trackY: 22, trackH: 22 }; // x margins match drawHourlyFrame
+EVTL.plotW = EVTL.W - EVTL.marginL - EVTL.marginR;
+const evTl = {};
+function evTlX(h) { return EVTL.marginL + (h / 24) * EVTL.plotW; }
+function buildEvTimeline() {
+  const svg = document.getElementById('ev-timeline');
+  if (svg.childNodes.length) return;
+  svg.setAttribute('viewBox', `0 0 ${EVTL.W} ${EVTL.H}`);
+  const { marginL, plotW, trackY, trackH } = EVTL;
+  evTl.svg = svg;
+  svg.appendChild(el('rect', { x: marginL, y: trackY, width: plotW, height: trackH, fill: cssVar('--surface-2'), stroke: cssVar('--border'), 'stroke-width': 1 }));
+  [6, 12, 18].forEach(h => svg.appendChild(el('line', { x1: evTlX(h), x2: evTlX(h), y1: trackY, y2: trackY + trackH, class: 'grid-line' })));
+  evTl.away = [el('rect', { y: trackY, height: trackH, fill: cssVar('--series-ev'), opacity: 0.28 }),
+               el('rect', { y: trackY, height: trackH, fill: cssVar('--series-ev'), opacity: 0.28 })];
+  evTl.away.forEach(r => svg.appendChild(r));
+  evTl.awayText = el('text', { y: trackY + trackH / 2 + 4, class: 'ev-tl-label', 'text-anchor': 'middle' });
+  evTl.awayText.textContent = 'Car away';
+  svg.appendChild(evTl.awayText);
+  const makeHandle = (inputId, shape) => {
+    const g = el('g', { class: 'ev-tl-handle' });
+    const hit = el('rect', { y: 0, height: EVTL.H, fill: 'transparent' });
+    g.appendChild(hit);
+    const text = el('text', { class: 'ev-tl-label', 'text-anchor': 'middle' });
+    if (shape === 'bar') {
+      g.appendChild(el('rect', { x: -5, y: trackY - 5, width: 10, height: trackH + 10, rx: 3, fill: cssVar('--series-ev'), stroke: cssVar('--surface-1'), 'stroke-width': 1.5 }));
+      text.setAttribute('y', 12);
+    } else {
+      g.appendChild(el('path', { d: `M0 ${trackY + trackH + 1} l-9 14 h18 z`, fill: cssVar('--series-ev'), stroke: cssVar('--surface-1'), 'stroke-width': 1.5 }));
+      text.setAttribute('y', EVTL.H - 3);
+    }
+    g.appendChild(text);
+    svg.appendChild(g);
+    const h = { g, hit, text, inputId };
+    g.addEventListener('pointerdown', e => {
+      if (e.button !== undefined && e.button !== 0) return;
+      e.preventDefault();
+      g.setPointerCapture(e.pointerId);
+      h.dragging = true;
+    });
+    g.addEventListener('pointermove', e => {
+      if (!h.dragging) return;
+      const rect = svg.getBoundingClientRect();
+      const px = (e.clientX - rect.left) / rect.width * EVTL.W;
+      const hour = (((Math.round((px - marginL) / plotW * 24)) % 24) + 24) % 24;
+      setEvTimeInput(h.inputId, hour);
+    });
+    ['pointerup', 'pointercancel'].forEach(t => g.addEventListener(t, () => { h.dragging = false; }));
+    return h;
+  };
+  evTl.dep = makeHandle('ev-departure', 'bar');
+  evTl.ret = makeHandle('ev-return', 'bar');
+  evTl.chg = makeHandle('ev-start', 'tri');
+}
+// Writes an hour into a time field. The leave and return handles refuse to
+// land on each other (an empty away window makes no sense to drag into).
+function setEvTimeInput(id, hour) {
+  if (id === 'ev-departure' && hour === timeInputHour(evInputs['ev-return'])) return;
+  if (id === 'ev-return' && hour === timeInputHour(evInputs['ev-departure'])) return;
+  const v = String(hour).padStart(2, '0') + ':00';
+  if (evInputs[id].value === v) return;
+  evInputs[id].value = v;
+  evInputs[id].dispatchEvent(new Event('input', { bubbles: true }));
+}
+function updateEvTimeline() {
+  buildEvTimeline();
+  const dep = timeInputHour(evInputs['ev-departure']), ret = timeInputHour(evInputs['ev-return']);
+  const chgId = evBidirOn ? 'ev-overnight-start' : 'ev-start';
+  const chg = timeInputHour(evInputs[chgId]);
+  // Touch-sized grab area: ~44 screen px on touch screens, ~24 otherwise.
+  const rectW = evTl.svg.getBoundingClientRect().width;
+  const scale = rectW > 0 ? rectW / EVTL.W : 1;
+  const hitW = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches ? 44 : 24) / scale;
+  const place = (h, hour, label) => {
+    const ok = Number.isFinite(hour);
+    h.g.style.display = ok ? '' : 'none';
+    if (!ok) return;
+    h.g.setAttribute('transform', `translate(${evTlX(hour)} 0)`);
+    h.hit.setAttribute('x', -hitW / 2); h.hit.setAttribute('width', hitW);
+    h.text.textContent = label;
+  };
+  place(evTl.dep, dep, 'Leaves');
+  place(evTl.ret, ret, 'Home');
+  evTl.chg.inputId = chgId;
+  place(evTl.chg, EV_TIMELINE_CHARGE_MARKER ? chg : NaN, evBidirOn ? 'Grid charging' : 'Charging');
+  // Away shading, wrapping past midnight into two pieces.
+  const pieces = [];
+  if (Number.isFinite(dep) && Number.isFinite(ret) && dep !== ret) {
+    if (dep < ret) pieces.push([dep, ret]); else { pieces.push([dep, 24]); pieces.push([0, ret]); }
+  }
+  evTl.away.forEach((r, i) => {
+    const p = pieces[i];
+    r.style.display = p ? '' : 'none';
+    if (p) { r.setAttribute('x', evTlX(p[0])); r.setAttribute('width', evTlX(p[1]) - evTlX(p[0])); }
+  });
+  const longest = pieces.slice().sort((a, b) => (b[1] - b[0]) - (a[1] - a[0]))[0];
+  evTl.awayText.style.display = longest && longest[1] - longest[0] >= 3 ? '' : 'none';
+  if (longest) evTl.awayText.setAttribute('x', (evTlX(longest[0]) + evTlX(longest[1])) / 2);
+}
+window.addEventListener('resize', () => { if (evTl.svg && document.getElementById('ev-timeline-wrap').style.display !== 'none') updateEvTimeline(); });
+
 // For carrying the tab's current settings into an exported copy.
 function getEvSettings() {
   const values = {};
   EV_INPUT_IDS.forEach(id => { values[id] = evInputs[id].value; });
-  return { bidirectional: evBidirOn, values };
+  return { bidirectional: evBidirOn, values, editType: evEditType, dayKinds: evDayKinds, schedules: evSchedules };
 }
 function applyEvSettings(s) {
   EV_INPUT_IDS.forEach(id => { if (id in s.values) evInputs[id].value = s.values[id]; });
   evBidirOn = !!s.bidirectional;
   evModeToggle.checked = evBidirOn;
-  updateEvModeUi();
+  if (s.schedules) { evSchedules = s.schedules; evDayKinds = s.dayKinds; evEditType = s.editType; }
+  loadEvScheduleIntoInputs();
 }
 
 // Reads an <input type="time"> field (native "HH:MM" value, or "" if
 // empty/unset) down to its hour -- step="3600" on these fields keeps the
 // native picker itself hour-only, so truncating rather than rounding here
 // never actually discards any minutes a user picked.
-function timeInputHour(input) {
-  const v = input.value;
+function timeInputHour(input) { return hourFromTimeString(input.value); }
+function hourFromTimeString(v) {
   if (!v) return NaN;
   const h = parseInt(v.slice(0, 2), 10);
   return Number.isFinite(h) ? h : NaN;
@@ -1323,15 +1579,20 @@ function hourInWindow(h, from, to) {
   return from < to ? (h >= from && h < to) : (h >= from || h < to);
 }
 
-function readEvSettings() {
+// mi: month to read the schedule fields (times, "Car never leaves") for,
+// under the day type currently being edited; the car/charger numbers are
+// shared by every month.
+function readEvSettings(mi) {
   const num = id => Number(evInputs[id].value);
-  const hour = id => timeInputHour(evInputs[id]);
+  const sc = evScheduleFor(evEditType, mi === undefined ? evMonthIdx() : mi);
+  const hour = id => EV_SCHED_IDS.includes(id) ? hourFromTimeString(sc.values[id]) : timeInputHour(evInputs[id]);
   return {
     distance: num('ev-distance'), efficiency: num('ev-efficiency'), rate: num('ev-charger-rate'),
     departure: hour('ev-departure'), ret: hour('ev-return'), start: hour('ev-start'),
     battery: num('ev-battery'), reservePct: num('ev-reserve'),
     gridStart: hour('ev-overnight-start'),
     roundTripPct: num('ev-round-trip'),
+    wfh: sc.wfh,
   };
 }
 
@@ -1344,6 +1605,7 @@ function readEvSettings() {
 // charge finished before the car has to leave again.
 function computeEvChargeKwh(s) {
   const kwh = new Array(24).fill(0);
+  if (s.wfh) return { kwh, fits: true };
   if (!(s.distance > 0) || !(s.efficiency > 0) || !(s.rate > 0) ||
       !Number.isFinite(s.departure) || !Number.isFinite(s.ret) || !Number.isFinite(s.start)) {
     return { kwh, fits: true };
@@ -1390,14 +1652,14 @@ function simulateBidirectionalDay(load, pv, s) {
   if (!(s.distance >= 0) || !(s.efficiency > 0) || !(s.rate > 0) || !(s.battery > 0) ||
       !(s.reservePct >= 0 && s.reservePct <= 100) ||
       !(s.roundTripPct > 0 && s.roundTripPct <= 100) ||
-      !Number.isFinite(s.departure) || !Number.isFinite(s.ret) || !Number.isFinite(s.gridStart)) {
+      (!s.wfh && (!Number.isFinite(s.departure) || !Number.isFinite(s.ret))) || !Number.isFinite(s.gridStart)) {
     return { ...empty, problem: 'Check charging option inputs' };
   }
   const cap = s.battery;
   const need = s.distance / s.efficiency;
   const reserve = cap * s.reservePct / 100;
   const eff = s.roundTripPct / 100;
-  const commutes = s.departure !== s.ret;
+  const commutes = !s.wfh && s.departure !== s.ret;
   if (commutes && need + reserve > cap + 1e-9) {
     return { ...empty, problem: 'The commute usage and "Always keep" amount add up to more than the battery\'s capacity.' };
   }
@@ -1451,13 +1713,13 @@ function simulateBidirectionalDay(load, pv, s) {
 
 // Everything drawEvChart and evAxisMax need for one month, in either mode.
 function evMonthModel(mi) {
-  const load = (DATA.heatmaps.loadWeekday || DATA.heatmaps.load)[mi];
+  const load = evLoadFor(evEditType, mi);
   const pv = DATA.heatmaps.pv[mi];
-  const s = readEvSettings();
+  const s = readEvSettings(mi);
   if (!evBidirOn) {
     // Starting while the car is still away would charge nothing at all;
     // flagged on the field itself rather than as a general warning.
-    if ([s.start, s.departure, s.ret].every(Number.isFinite) && hourInWindow(s.start, s.departure, s.ret)) {
+    if (!s.wfh && [s.start, s.departure, s.ret].every(Number.isFinite) && hourInWindow(s.start, s.departure, s.ret)) {
       const zeros = new Array(24).fill(0);
       return { load, pv, s, charge: zeros, gridCharge: zeros, solarCharge: zeros, supplied: zeros, soc: null, home: null, problem: null, startBeforeHome: true };
     }
@@ -1566,6 +1828,9 @@ function drawEvShareChart(selectedIdx) {
   svg.appendChild(tl);
 }
 function evBidirVerdictHtml() {
+  return evBidirVerdictCore() + `<span class="ev-verdict-scope">Based on ${evTypeName(evEditType)}.</span>`;
+}
+function evBidirVerdictCore() {
   const good = [], poor = [];
   let bestShare = 0;
   for (let mi = 0; mi < 12; mi++) {
@@ -1595,6 +1860,10 @@ function drawEvChart(month, opts) {
   svg.innerHTML = '';
   const mi = DATA.months.indexOf(month);
   const m = evMonthModel(mi);
+  // Nothing to schedule when the car never leaves.
+  document.getElementById('ev-timeline-wrap').style.display = m.s.wfh ? 'none' : '';
+  document.getElementById('ev-timeline-hint').style.display = m.s.wfh ? 'none' : '';
+  if (!m.s.wfh) updateEvTimeline();
   document.getElementById('ev-start-field').classList.toggle('ev-field-invalid', !!m.startBeforeHome);
   document.getElementById('ev-start-error').style.display = m.startBeforeHome ? '' : 'none';
   // A settings problem (either mode) replaces the verdict in its box.
@@ -1629,7 +1898,7 @@ function drawEvChart(month, opts) {
 
   // Schedule markers (leaves / home / charging starts) as thin dashed
   // vertical lines -- see the .ev-marker-line CSS note for why violet.
-  const markers = [
+  const markers = m.s.wfh ? [] : [
     { hour: m.s.departure, label: 'Leaves' },
     { hour: m.s.ret, label: 'Home' },
     evBidirOn ? { hour: m.s.gridStart, label: 'Grid charging' } : { hour: m.s.start, label: 'Charging' },
@@ -1807,6 +2076,8 @@ function renderAll() {
     document.getElementById('legend-gas-compound-fill').style.display = 'none';
     document.getElementById('legend-gas-compound-line').style.display = 'none';
     placeholderSvg('chart-ev', 'Upload both an electric usage export and a PVWatts export above to see this chart');
+    document.getElementById('ev-timeline-wrap').style.display = 'none';
+    document.getElementById('ev-timeline-hint').style.display = 'none';
     document.getElementById('ev-verdict').style.display = 'none';
     document.getElementById('ev-share-wrap').style.display = 'none';
     document.getElementById('ev-start-field').classList.remove('ev-field-invalid');
@@ -2320,6 +2591,10 @@ function aggregateRawInterval(sheet) {
   const hourCount = DATA.months.map(() => new Array(24).fill(0));
   const hourSumWeekday = DATA.months.map(() => new Array(24).fill(0));
   const hourCountWeekday = DATA.months.map(() => new Array(24).fill(0));
+  // per month x day of week (0 = Sun) x hour, for the EV tab's workday /
+  // non-workday split (any weekday can be reassigned there)
+  const hourSumDow = DATA.months.map(() => Array.from({ length: 7 }, () => new Array(24).fill(0)));
+  const hourCountDow = DATA.months.map(() => Array.from({ length: 7 }, () => new Array(24).fill(0)));
   const monthTotal = new Array(12).fill(0);
   const monthYears = DATA.months.map(() => new Set());
   const tempPairs = [];
@@ -2333,6 +2608,7 @@ function aggregateRawInterval(sheet) {
     const year = dateIdx >= 0 ? yearFromDateValue(row[dateIdx]) : null;
     if (year) monthYears[mi].add(year);
     const dow = dateIdx >= 0 ? dayOfWeekFromDateValue(row[dateIdx]) : null;
+    if (dow !== null) { hourSumDow[mi][dow][hr] += net; hourCountDow[mi][dow][hr]++; }
     if (dow !== null && dow >= 1 && dow <= 5) {
       hourSumWeekday[mi][hr] += net; hourCountWeekday[mi][hr]++;
     }
@@ -2343,10 +2619,12 @@ function aggregateRawInterval(sheet) {
   }
   const hourMatrix = DATA.months.map((_, mi) => hourSum[mi].map((s, h) => hourCount[mi][h] ? s / hourCount[mi][h] : 0));
   const hourMatrixWeekday = DATA.months.map((_, mi) => hourSumWeekday[mi].map((s, h) => hourCountWeekday[mi][h] ? s / hourCountWeekday[mi][h] : 0));
+  const hourMatrixDow = DATA.months.map((_, mi) => hourSumDow[mi].map((row, d) =>
+    hourCountDow[mi][d].some(c => c > 0) ? row.map((sum, h) => hourCountDow[mi][d][h] ? sum / hourCountDow[mi][d][h] : 0) : null));
   const monthTotalPerYear = monthTotal.map((total, mi) => total / (monthYears[mi].size || 1));
   const coldShare = weatherIdx >= 0 ? computeColdWeatherShare(tempPairs, COLD_THRESHOLD_F) : null;
   const tempTrend = weatherIdx >= 0 ? computeTempTrend(tempPairs, TEMP_TREND_MIN_SAMPLES, TEMP_TREND_SMOOTH_WINDOW) : null;
-  return { hourMatrix, hourMatrixWeekday, monthTotal: monthTotalPerYear, coldShare, tempTrend, matched };
+  return { hourMatrix, hourMatrixWeekday, hourMatrixDow, monthTotal: monthTotalPerYear, coldShare, tempTrend, matched };
 }
 function aggregatePvWatts(sheet) {
   const monthIdx = findCol(sheet.headers, 'Month');
@@ -2429,6 +2707,7 @@ async function processFile(file) {
     if (finalKind === 'electric') {
       DATA.heatmaps.load = agg.hourMatrix;
       DATA.heatmaps.loadWeekday = agg.hourMatrixWeekday;
+      DATA.heatmaps.loadDow = agg.hourMatrixDow;
       DATA.monthlyTotals.load_kwh = agg.monthTotal.map(v => Math.round(v * 10) / 10);
       DATA.tempCallout.elec = agg.coldShare;
       DATA.tempTrend.elec = agg.tempTrend;
